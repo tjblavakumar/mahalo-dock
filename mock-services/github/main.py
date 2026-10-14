@@ -1,17 +1,52 @@
-"""Mock GitHub Service - Simulates GitHub REST API for MAHALO3."""
+"""GitHub adapter service for MAHALO-dock.
 
+Exposes a single stable HTTP contract (the original mock-GitHub API with
+``X-API-Token`` auth) and dispatches each request to one of two interchangeable
+backends chosen by the ``GITHUB_MODE`` environment variable:
+
+- ``mock`` (default) — the original in-memory JSON store; offline-friendly.
+- ``real``            — backed by a self-hosted Gitea instance.
+
+The contract, auth, request models, status codes, and response shapes are
+identical in both modes, so MAHALO's agent tools, proxy, and dashboard need no
+changes when the mode is flipped.
+"""
+
+import logging
 import os
 from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel
 
-import store
-from store import BRANCHES, COMMITS, CONTRIBUTOR_STATS, PULL_REQUESTS, REPOS
+from backend_base import BackendError, GithubBackend
 
-app = FastAPI(title="Mock GitHub Service", version="1.0.0")
+logger = logging.getLogger("github-adapter")
+
+app = FastAPI(title="MAHALO GitHub Adapter", version="2.0.0")
 
 API_TOKEN = os.environ.get("MOCK_GITHUB_TOKEN", "mock-github-token-12345")
+GITHUB_MODE = os.environ.get("GITHUB_MODE", "mock").strip().lower()
+
+
+def _build_backend() -> GithubBackend:
+    """Instantiate the backend selected by GITHUB_MODE (default: mock)."""
+    if GITHUB_MODE == "real":
+        from gitea_backend import GiteaBackend
+
+        logger.info("GITHUB_MODE=real → using Gitea-backed adapter")
+        return GiteaBackend()
+
+    if GITHUB_MODE != "mock":
+        logger.warning("Unknown GITHUB_MODE=%r; falling back to 'mock'", GITHUB_MODE)
+    else:
+        logger.info("GITHUB_MODE=mock → using in-memory JSON store")
+    from mock_backend import MockBackend
+
+    return MockBackend()
+
+
+backend: GithubBackend = _build_backend()
 
 
 def verify_token(x_api_token: Optional[str] = Header(None)):
@@ -20,11 +55,39 @@ def verify_token(x_api_token: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail="Invalid API token")
 
 
+def _call(fn, *args, **kwargs):
+    """Invoke a backend method, translating BackendError into HTTPException."""
+    try:
+        return fn(*args, **kwargs)
+    except BackendError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+
+
+# --- Request models (unchanged contract) ---
+
+class CreateBranchRequest(BaseModel):
+    name: str
+    from_branch: str = "main"
+
+
+class CreateCommitRequest(BaseModel):
+    branch: str
+    message: str
+    author_id: str
+    additions: int = 0
+    deletions: int = 0
+
+
 # --- Health ---
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "service": "mock-github", "version": "1.0.0"}
+    return {
+        "status": "healthy",
+        "service": "github-adapter",
+        "version": "2.0.0",
+        "mode": GITHUB_MODE,
+    }
 
 
 # --- Repos ---
@@ -32,39 +95,19 @@ def health():
 @app.post("/repos", status_code=201)
 def create_repo(repo: dict, x_api_token: Optional[str] = Header(None)):
     verify_token(x_api_token)
-    repo_id = str(repo.get("name") or "repo").lower().strip()
-    if any(r["id"] == repo_id for r in REPOS):
-        raise HTTPException(status_code=409, detail="Repository already exists")
-
-    new_repo = {
-        "id": repo_id,
-        "name": repo_id,
-        "description": repo.get("description") or "",
-        "language": repo.get("language") or "Python",
-        "default_branch": repo.get("default_branch") or "main",
-        "stars": 0,
-        "open_issues": 0,
-        "last_push": "2026-08-29",
-    }
-    REPOS.append(new_repo)
-    BRANCHES.setdefault(repo_id, [{"name": "main", "protected": True, "last_commit": "2026-08-29"}])
-    store.save()
-    return new_repo
+    return _call(backend.create_repo, repo)
 
 
 @app.get("/repos")
 def list_repos(x_api_token: Optional[str] = Header(None)):
     verify_token(x_api_token)
-    return {"repos": REPOS}
+    return _call(backend.list_repos)
 
 
 @app.get("/repos/{repo_id}")
 def get_repo(repo_id: str, x_api_token: Optional[str] = Header(None)):
     verify_token(x_api_token)
-    repo = next((r for r in REPOS if r["id"] == repo_id), None)
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    return repo
+    return _call(backend.get_repo, repo_id)
 
 
 # --- Branches ---
@@ -72,14 +115,7 @@ def get_repo(repo_id: str, x_api_token: Optional[str] = Header(None)):
 @app.get("/repos/{repo_id}/branches")
 def list_branches(repo_id: str, x_api_token: Optional[str] = Header(None)):
     verify_token(x_api_token)
-    if repo_id not in BRANCHES:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    return {"branches": BRANCHES[repo_id]}
-
-
-class CreateBranchRequest(BaseModel):
-    name: str
-    from_branch: str = "main"
+    return _call(backend.list_branches, repo_id)
 
 
 @app.post("/repos/{repo_id}/branches", status_code=201)
@@ -89,22 +125,7 @@ def create_branch(
     x_api_token: Optional[str] = Header(None),
 ):
     verify_token(x_api_token)
-    if repo_id not in BRANCHES:
-        raise HTTPException(status_code=404, detail="Repository not found")
-
-    # Check if branch already exists
-    existing = next((b for b in BRANCHES[repo_id] if b["name"] == request.name), None)
-    if existing:
-        raise HTTPException(status_code=409, detail="Branch already exists")
-
-    new_branch = {
-        "name": request.name,
-        "protected": False,
-        "last_commit": "2026-08-25",
-    }
-    BRANCHES[repo_id].append(new_branch)
-    store.save()
-    return new_branch
+    return _call(backend.create_branch, repo_id, request.name, request.from_branch)
 
 
 # --- Pull Requests ---
@@ -116,16 +137,8 @@ def list_all_pulls(
     repo_id: Optional[str] = Query(None),
     x_api_token: Optional[str] = Header(None),
 ):
-    """Flat list of all pull requests across repositories (optionally filtered)."""
     verify_token(x_api_token)
-    prs = list(PULL_REQUESTS)
-    if repo_id:
-        prs = [pr for pr in prs if pr["repo_id"] == repo_id]
-    if status:
-        prs = [pr for pr in prs if pr["status"] == status]
-    if author_id:
-        prs = [pr for pr in prs if pr["author_id"] == author_id]
-    return {"pull_requests": prs, "total": len(prs)}
+    return _call(backend.list_all_pulls, status, author_id, repo_id)
 
 
 @app.get("/repos/{repo_id}/pulls")
@@ -136,26 +149,19 @@ def list_pulls(
     x_api_token: Optional[str] = Header(None),
 ):
     verify_token(x_api_token)
-    prs = [pr for pr in PULL_REQUESTS if pr["repo_id"] == repo_id]
-
-    if status:
-        prs = [pr for pr in prs if pr["status"] == status]
-    if author_id:
-        prs = [pr for pr in prs if pr["author_id"] == author_id]
-
-    return {"pull_requests": prs, "total": len(prs)}
+    return _call(backend.list_pulls, repo_id, status, author_id)
 
 
 @app.get("/repos/{repo_id}/pulls/{pr_number}")
 def get_pull(repo_id: str, pr_number: int, x_api_token: Optional[str] = Header(None)):
     verify_token(x_api_token)
-    pr = next(
-        (pr for pr in PULL_REQUESTS if pr["repo_id"] == repo_id and pr["number"] == pr_number),
-        None,
-    )
-    if not pr:
-        raise HTTPException(status_code=404, detail="Pull request not found")
-    return pr
+    return _call(backend.get_pull, repo_id, pr_number)
+
+
+@app.post("/repos/{repo_id}/pulls", status_code=201)
+def create_pull(repo_id: str, request: dict, x_api_token: Optional[str] = Header(None)):
+    verify_token(x_api_token)
+    return _call(backend.create_pull, repo_id, request)
 
 
 # --- Commits ---
@@ -168,102 +174,32 @@ def list_commits(
     x_api_token: Optional[str] = Header(None),
 ):
     verify_token(x_api_token)
-    commits = [c for c in COMMITS if c["repo_id"] == repo_id]
-
-    if branch:
-        commits = [c for c in commits if c["branch"] == branch]
-    if author:
-        commits = [
-            c for c in commits
-            if author.lower() in c["author"].lower() or c["author_id"] == author
-        ]
-
-    # Sort by date descending
-    commits.sort(key=lambda x: x["date"], reverse=True)
-    return {"commits": commits, "total": len(commits)}
-
-
-class CreateCommitRequest(BaseModel):
-    branch: str
-    message: str
-    author_id: str
-    additions: int = 0
-    deletions: int = 0
+    return _call(backend.list_commits, repo_id, branch, author)
 
 
 @app.post("/repos/{repo_id}/commits", status_code=201)
 def create_commit(
     repo_id: str,
-    request: CreateCommitRequest,
+    request: dict,
     x_api_token: Optional[str] = Header(None),
 ):
     verify_token(x_api_token)
-    if repo_id not in BRANCHES:
-        raise HTTPException(status_code=404, detail="Repository not found")
-
-    # Verify branch exists
-    branch = next((b for b in BRANCHES[repo_id] if b["name"] == request.branch), None)
-    if not branch:
-        raise HTTPException(status_code=404, detail="Branch not found")
-
-    # Find author name
-    author_name = request.author_id
-    for repo_stats in CONTRIBUTOR_STATS.values():
-        for stat in repo_stats:
-            if stat["author_id"] == request.author_id:
-                author_name = stat["author"]
-                break
-
-    new_commit = {
-        "id": f"c{len(COMMITS) + 1:03d}",
-        "repo_id": repo_id,
-        "branch": request.branch,
-        "author": author_name,
-        "author_id": request.author_id,
-        "message": request.message,
-        "date": "2026-08-25",
-        "additions": request.additions,
-        "deletions": request.deletions,
-    }
-    COMMITS.append(new_commit)
-    store.save()
-    return new_commit
+    # Accept the legacy metadata-only shape as well as the new file-contents
+    # shape (Task 5). The backend decides what it supports.
+    return _call(backend.create_commit, repo_id, request)
 
 
-# --- Stats ---
+# --- Docs ---
 
 @app.post("/repos/{repo_id}/readme", status_code=201)
 def create_readme(repo_id: str, readme: dict, x_api_token: Optional[str] = Header(None)):
     verify_token(x_api_token)
-    if repo_id not in BRANCHES:
-        raise HTTPException(status_code=404, detail="Repository not found")
+    return _call(backend.create_readme, repo_id, readme)
 
-    doc = {
-        "repo_id": repo_id,
-        "title": readme.get("title") or "README.md",
-        "content": readme.get("content") or "",
-        "updated_at": "2026-08-29",
-    }
-    return doc
 
+# --- Stats ---
 
 @app.get("/repos/{repo_id}/stats")
 def get_stats(repo_id: str, x_api_token: Optional[str] = Header(None)):
     verify_token(x_api_token)
-    if repo_id not in CONTRIBUTOR_STATS:
-        raise HTTPException(status_code=404, detail="Repository not found")
-
-    contributors = CONTRIBUTOR_STATS[repo_id]
-    total_commits = sum(c["commits"] for c in contributors)
-    total_additions = sum(c["additions"] for c in contributors)
-    total_deletions = sum(c["deletions"] for c in contributors)
-
-    return {
-        "repo_id": repo_id,
-        "contributors": contributors,
-        "total_commits": total_commits,
-        "total_additions": total_additions,
-        "total_deletions": total_deletions,
-        "active_branches": len(BRANCHES.get(repo_id, [])),
-        "open_prs": len([pr for pr in PULL_REQUESTS if pr["repo_id"] == repo_id and pr["status"] == "open"]),
-    }
+    return _call(backend.get_stats, repo_id)

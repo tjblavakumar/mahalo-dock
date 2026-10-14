@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   backend:
     build:
@@ -32,7 +30,9 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      # Host port is configurable (FRONTEND_PORT) to avoid clashes with a local
+      # dev server already on 3000. Container always listens on 3000.
+      - "${FRONTEND_PORT:-3000}:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8008
     depends_on:
@@ -66,6 +66,13 @@ services:
       timeout: 5s
       retries: 3
 
+  # GitHub adapter. Preserves the original mock-GitHub contract on :5003 with
+  # X-API-Token auth. GITHUB_MODE selects the backend:
+  #   real (default) → backed by the self-hosted Gitea service
+  #   mock           → original in-memory JSON store (fully offline)
+  # In real mode it reads the bootstrap-generated token from the shared
+  # gitea-bootstrap volume (GITEA_TOKEN_FILE) and waits for Gitea to be healthy
+  # and the bootstrap to complete.
   mock-github:
     build:
       context: ./mock-services/github
@@ -74,11 +81,24 @@ services:
       - "5003:5003"
     environment:
       - MOCK_GITHUB_TOKEN=${MOCK_GITHUB_TOKEN:-mock-github-token-12345}
+      - GITHUB_MODE=${GITHUB_MODE:-real}
+      - GITEA_URL=http://gitea:3000
+      - GITEA_ADMIN_USER=${GITEA_ADMIN_USER:-mahalo_admin}
+      - GITEA_PUBLIC_URL=${GITEA_PUBLIC_URL:-http://localhost:3001}
+      - GITEA_TOKEN_FILE=/bootstrap/gitea_token
+    volumes:
+      # Read-only access to the bootstrap token written by gitea-bootstrap.
+      - gitea-bootstrap:/bootstrap:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5003/health"]
       interval: 10s
       timeout: 5s
       retries: 3
+    depends_on:
+      gitea:
+        condition: service_healthy
+      gitea-bootstrap:
+        condition: service_completed_successfully
 
   mock-servicenow:
     build:
@@ -94,5 +114,67 @@ services:
       timeout: 5s
       retries: 3
 
+  # Self-hosted Git server. In GITHUB_MODE=real the github adapter is backed by
+  # this service (reachable in-stack at http://gitea:3000). Web UI is exposed on
+  # the host at :3001. Data persists in the gitea-data named volume.
+  gitea:
+    image: gitea/gitea:1.27.3
+    ports:
+      # Web UI / REST API (host:container). Container always listens on 3000.
+      - "3001:3000"
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      # First-run configuration (writes app.ini, skips the web installer).
+      - GITEA__security__INSTALL_LOCK=true
+      - GITEA__server__DOMAIN=${GITEA_DOMAIN:-localhost}
+      - GITEA__server__HTTP_PORT=3000
+      # ROOT_URL must reflect the host-exposed port so links in the UI resolve.
+      - GITEA__server__ROOT_URL=${GITEA_ROOT_URL:-http://localhost:3001/}
+      - GITEA__server__SSH_DOMAIN=${GITEA_DOMAIN:-localhost}
+      - GITEA__server__START_SSH_SERVER=false
+      - GITEA__service__DISABLE_REGISTRATION=true
+      - GITEA__service__REQUIRE_SIGNIN_VIEW=false
+      - GITEA__openid__ENABLE_OPENID_SIGNIN=false
+      - GITEA__database__DB_TYPE=sqlite3
+    volumes:
+      - gitea-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # One-shot provisioning for Gitea: creates an admin user (CLI), an API token,
+  # and a seeded sample repo with real files. Built FROM the gitea image so the
+  # `gitea` CLI + shared /data volume are available (the first admin can only be
+  # made via the CLI). Idempotent: safe to re-run. Exits when done.
+  gitea-bootstrap:
+    build:
+      context: ./mock-services/gitea-bootstrap
+      dockerfile: Dockerfile
+      args:
+        GITEA_VERSION: "1.27.3"
+    environment:
+      - GITEA_URL=http://gitea:3000
+      - GITEA_ADMIN_USER=${GITEA_ADMIN_USER:-mahalo_admin}
+      - GITEA_ADMIN_PASSWORD=${GITEA_ADMIN_PASSWORD:-MahaloDock123!}
+      - GITEA_ADMIN_EMAIL=${GITEA_ADMIN_EMAIL:-admin@mahalo.local}
+      - GITEA_TOKEN_NAME=${GITEA_TOKEN_NAME:-mahalo-adapter}
+      - GITEA_SEED_REPO=${GITEA_SEED_REPO:-payment-service}
+      - GITEA_TOKEN_FILE=/bootstrap/gitea_token
+    volumes:
+      # Shared with the server so the CLI can read the same config/data.
+      - gitea-data:/data
+      # Where the generated adapter token is persisted for the github adapter.
+      - gitea-bootstrap:/bootstrap
+    depends_on:
+      gitea:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
   backend-data:
+  gitea-data:
+  gitea-bootstrap:

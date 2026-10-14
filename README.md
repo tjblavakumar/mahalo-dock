@@ -1,8 +1,143 @@
-# MAHALO3 — AI-Powered SDLC Platform
+# MAHALO-dock — One-Command AI SDLC Platform (Dockerized)
 
-MAHALO3 is a multi-persona platform that allows Product Managers, Developers, and Executives to interact with an AI agent connected to Jira, Confluence, GitHub, and ServiceNow. It retrieves and correlates information across systems, performs actions with user approval, and presents data through role-specific dashboards.
+MAHALO-dock packages the entire MAHALO platform as **one deployable unit**. A single
+`docker compose up` brings up the frontend, backend, the four mock services, and a
+**real self-hosted [Gitea](https://about.gitea.com/) git server**. The GitHub mock is
+evolved into an **adapter**: it keeps MAHALO's existing HTTP contract but, in its default
+"real" mode, is backed by Gitea — so the chatbot creates **real repositories, branches,
+commits (with real file contents), and pull requests** you can open in a browser.
 
-## Quick Start
+It runs the same way on **Windows 11** (Docker Desktop) and **Zorin / Ubuntu Linux**
+(Docker Engine). The only thing that needs the internet at demo time is the LLM API call;
+everything else is local.
+
+Multi-persona: Product Managers, Developers, and Executives chat with an AI agent connected
+to Jira, Confluence, GitHub (→ Gitea), and ServiceNow. It correlates information across
+systems, performs actions with user approval, and presents role-specific dashboards.
+
+---
+
+## 🚀 Run with Docker (recommended)
+
+This is the canonical way to run MAHALO-dock.
+
+### Prerequisites
+
+| OS | What to install |
+|----|-----------------|
+| **Windows 11** | [Docker Desktop](https://docs.docker.com/desktop/install/windows-install/) (includes Compose v2). Use a PowerShell or Git-Bash terminal. |
+| **Zorin / Ubuntu Linux** | [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) + the Compose plugin. Add your user to the `docker` group (`sudo usermod -aG docker $USER`, then log out/in) so you can run `docker` without `sudo`. |
+
+Verify your install:
+
+```bash
+docker version
+docker compose version   # must be Compose v2 (note: "compose", not "docker-compose")
+```
+
+### 1. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and set your LLM credentials (see [LLM Configuration](#llm-configuration)). At
+minimum `OPENAI_API_KEY` is required — the orchestrator uses OpenAI-style function calling.
+All other defaults in `.env.example` are good to go for a local demo.
+
+### 2. Bring up the whole stack
+
+```bash
+docker compose up --build
+```
+
+First run pulls the Gitea image and builds the app images, then starts everything in
+dependency order: Gitea boots → a one-shot **bootstrap** creates an admin user, an API
+token, and a seeded `payment-service` repo → the GitHub adapter comes up in **real** mode
+wired to Gitea → backend, mocks, and frontend start.
+
+Add `-d` to run detached. Shut down with `docker compose down` (add `-v` to also wipe the
+Gitea data + bootstrap volumes for a totally fresh start).
+
+**Convenience wrappers** (optional — they just call `docker compose` and auto-create `.env`
+from the example on first run):
+
+```bash
+# Linux / macOS                 # Windows 11
+./docker-up.sh                  docker-up.bat          # real mode, detached
+./docker-up.sh mock             docker-up.bat mock     # offline mock mode
+./docker-down.sh                docker-down.bat        # stop (keep data)
+./docker-down.sh --wipe         docker-down.bat --wipe # stop + wipe Gitea data
+```
+
+### 3. Ports
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| Frontend | http://localhost:3000 | Override with `FRONTEND_PORT` if 3000 is taken |
+| Backend API | http://localhost:8008 | |
+| Gitea web UI | http://localhost:3001 | Login `mahalo_admin` / `MahaloDock123!` (from `.env`) |
+| GitHub adapter | http://localhost:5003 | `X-API-Token` contract |
+| Mock Jira / Confluence / ServiceNow | :5001 / :5002 / :5004 | |
+
+> **Port 3000 already in use?** If you have a local dev server running, set
+> `FRONTEND_PORT=3010` (or any free port) in `.env` before `docker compose up`.
+
+### 4. GITHUB_MODE — real (Gitea) vs mock (offline)
+
+The adapter has two interchangeable backends, selected by `GITHUB_MODE`:
+
+- **`real` (default):** backed by the self-hosted Gitea. Real repos/branches/commits/PRs.
+- **`mock`:** the original in-memory JSON store — fully offline, no Gitea needed.
+
+Run the fully offline / Gitea-free variant with the provided override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mock.yml up \
+    backend frontend mock-jira mock-confluence mock-github mock-servicenow
+```
+
+(The override forces `GITHUB_MODE=mock` and drops the Gitea dependency, so Gitea and the
+bootstrap simply aren't started.)
+
+### 5. First-time app setup
+
+Open the frontend, then:
+
+1. **Register** at `/register` (pick a role: Product Manager, Developer, or Executive).
+2. **Login** at `/login`.
+3. **Connect integrations** on the Connections page (`/connections`) using these
+   browser-reachable host URLs:
+   - Jira — URL `http://localhost:5001`, Token `mock-jira-token-12345`
+   - Confluence — URL `http://localhost:5002`, Token `mock-confluence-token-12345`
+   - GitHub — URL `http://localhost:5003`, Token `mock-github-token-12345`
+   - ServiceNow — URL `http://localhost:5004`, Token `mock-servicenow-token-12345`
+
+   (These tokens are the local demo defaults from `.env.example`.)
+
+### 6. Demo script — real code check-in to Gitea
+
+As a **Developer**, in the chat:
+
+1. *"List my repositories"* → shows `payment-service` (served from Gitea).
+2. *"Show recent commits on payment-service"* → real commit history from Gitea.
+3. *"Create a branch feature/PAY-500-coupons on payment-service"* → approve the proposal.
+4. *"Write a coupon validation module and commit it to that branch"* → the agent generates
+   code and proposes a commit of real file contents; approve it.
+5. *"Open a pull request from that branch into main"* → approve; the reply includes a
+   clickable PR link.
+6. Open **http://localhost:3001** and view the branch, the committed file, and the PR in
+   the Gitea web UI.
+
+> The LLM calls (steps that generate code/decide tools) require network access. The
+> Gitea/branch/commit/PR operations are entirely local.
+
+---
+
+## Run without Docker (manual, MAHALO3-style)
+
+<details>
+<summary>Expand: run each service directly with Python/Node (no containers, no Gitea)</summary>
 
 ### Prerequisites
 - Python 3.11+
@@ -93,16 +228,27 @@ Open http://localhost:3000 in your browser.
 5. **Dashboard** — Select one or multiple projects via the sidebar or Connections page to view real-time aggregated metrics across all your active initiatives.
 6. **Chat** — Interact with the AI agent to query cross-system telemetry, write stories, compare projects, and propose actions.
 
+</details>
+
 ## Architecture
 
 ```
 Frontend (Next.js :3000)  →  Backend (FastAPI :8008)  →  Mock Services
                                     ↕                     ├── Jira (:5001)
                         SQLite + Agent Orchestrator       ├── Confluence (:5002)
-                                    ↕                     ├── GitHub (:5003)
-                     OpenAI (orchestrator/tool calling)   └── ServiceNow (:5004)
-                     1min.ai (response synthesis)
+                                    ↕                     ├── GitHub adapter (:5003)
+                     OpenAI (orchestrator/tool calling)   │     └─(real)→ Gitea (:3001)
+                     1min.ai (response synthesis)          └── ServiceNow (:5004)
 ```
+
+The **GitHub adapter** keeps MAHALO's `X-API-Token` + `/repos/...` contract on :5003, but
+dispatches by `GITHUB_MODE`:
+- **real** → translates each call to Gitea's REST API (real git/PR engine behind it),
+- **mock** → the original in-memory JSON store (offline).
+
+A one-shot `gitea-bootstrap` container provisions Gitea on first boot (admin user, API
+token, seeded repo) and writes the token to a volume the adapter reads. Gitea data persists
+in a named volume. The adapter and Gitea run as **separate containers**.
 
 The agent uses a **mixed-provider** model: OpenAI drives the orchestrator (deciding which
 tools to call from the user's intent, via native function calling), while a switchable
@@ -112,21 +258,28 @@ JSON store, so changes survive restarts.
 ## Project Structure
 
 ```
-mahalo3/
+mahalo-dock/
 ├── frontend/               # Next.js + React + Tailwind
 ├── backend/                # FastAPI + SQLAlchemy + LangChain
 ├── mock-services/
 │   ├── jira/               # Mock Jira (:5001)
 │   ├── confluence/         # Mock Confluence (:5002)
-│   ├── github/             # Mock GitHub (:5003)
+│   ├── github/             # GitHub adapter (:5003) — mock | real (Gitea) backends
+│   ├── gitea-bootstrap/    # One-shot Gitea provisioning (admin + token + seed repo)
 │   └── servicenow/         # Mock ServiceNow (:5004) — deployments + incidents
+├── docker-compose.yml      # Full stack: frontend, backend, mocks, Gitea, bootstrap
+├── docker-compose.mock.yml # Override: offline mock mode (no Gitea)
 ├── generate_mock_data.py   # Generate correlated mock data across all systems (1min.ai)
-├── start_all.bat/.sh       # Start every service at once
-├── stop_all.bat/.sh        # Stop every service
-├── SPEC.md                 # Full project specification
-├── DEMO.md                 # Demo scenarios
-└── docker-compose.yml      # Container orchestration
+├── start_all.bat/.sh       # Start every service at once (non-Docker path)
+├── stop_all.bat/.sh        # Stop every service (non-Docker path)
+└── mahalo-dock-docs/       # Spec, plan, and progress tracker for the dockerization
 ```
+
+The GitHub adapter directory (`mock-services/github/`) contains:
+- `main.py` — the FastAPI contract + `GITHUB_MODE` dispatch
+- `backend_base.py` — the common backend interface
+- `mock_backend.py` — in-memory JSON store backend (offline)
+- `gitea_backend.py` — Gitea-backed backend (real repos/branches/commits/PRs)
 
 Each mock service directory contains:
 - `seed_data.py` — the curated starting dataset (source of truth for a clean state)

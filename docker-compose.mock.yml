@@ -1,0 +1,20 @@
+# Offline override: run the GitHub adapter in pure mock mode with NO Gitea.
+#
+# The default docker-compose.yml wires the github adapter to the real Gitea
+# service (GITHUB_MODE=real) and makes it depend on Gitea + the bootstrap. For a
+# fully network-free / Gitea-free demo, layer this override on top:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mock.yml up \
+#       backend frontend mock-jira mock-confluence mock-github mock-servicenow
+#
+# It forces GITHUB_MODE=mock and drops the Gitea dependency so the adapter uses
+# its in-memory JSON store. (Gitea / gitea-bootstrap simply aren't started when
+# you don't name them.)
+services:
+  mock-github:
+    environment:
+      - MOCK_GITHUB_TOKEN=${MOCK_GITHUB_TOKEN:-mock-github-token-12345}
+      - GITHUB_MODE=mock
+    # Drop the Gitea/bootstrap dependency entirely for offline use. `!reset`
+    # (Compose merge spec) clears the base value instead of merging into it.
+    depends_on: !reset []

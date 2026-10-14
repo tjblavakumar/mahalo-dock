@@ -128,6 +128,50 @@ async def execute_proposed_action(proposal: dict, integrations: list[Integration
             else:
                 return f"❌ Failed to create branch: {response.text}"
 
+        elif action == "commit_files":
+            response = await client.post(
+                f"{integration.url}/repos/{params['repo_id']}/commits",
+                headers=headers,
+                json={
+                    "branch": params["branch"],
+                    "message": params["message"],
+                    "files": params.get("files", []),
+                },
+            )
+            if response.status_code == 201:
+                data = response.json()
+                committed = data.get("files_committed") or [
+                    f.get("path") for f in params.get("files", [])
+                ]
+                files_str = ", ".join(committed) if committed else "files"
+                msg = f"✅ Committed {files_str} to **{params['branch']}**"
+                if data.get("url"):
+                    msg += f"\n🔗 {data['url']}"
+                return msg
+            else:
+                return f"❌ Failed to commit files: {response.text}"
+
+        elif action == "open_pull_request":
+            response = await client.post(
+                f"{integration.url}/repos/{params['repo_id']}/pulls",
+                headers=headers,
+                json={
+                    "head": params["head"],
+                    "base": params.get("base", "main"),
+                    "title": params.get("title") or params["head"],
+                    "body": params.get("body", ""),
+                },
+            )
+            if response.status_code == 201:
+                data = response.json()
+                number = data.get("number")
+                msg = f"✅ Pull request opened: **#{number}** {data.get('title', '')}".rstrip()
+                if data.get("url"):
+                    msg += f"\n🔗 {data['url']}"
+                return msg
+            else:
+                return f"❌ Failed to open pull request: {response.text}"
+
         elif action == "create_incident":
             response = await client.post(
                 f"{integration.url}/incidents",

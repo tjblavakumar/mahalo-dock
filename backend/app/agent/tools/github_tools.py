@@ -7,6 +7,28 @@ import httpx
 from langchain_core.tools import tool
 
 
+def _normalize_files_arg(files) -> list:
+    """Coerce the LLM-provided ``files`` argument into [{path, content}, ...].
+
+    Tolerates a JSON string, a single dict, or a list of dicts. Silently drops
+    entries without a path; keeps content as a string (empty if missing).
+    """
+    if isinstance(files, str):
+        try:
+            files = json.loads(files)
+        except json.JSONDecodeError:
+            return []
+    if isinstance(files, dict):
+        files = [files]
+    if not isinstance(files, list):
+        return []
+    out = []
+    for f in files:
+        if isinstance(f, dict) and f.get("path"):
+            out.append({"path": str(f["path"]), "content": str(f.get("content") or "")})
+    return out
+
+
 def _make_github_request(url: str, token: str, method: str = "GET", endpoint: str = "", params: dict = None, body: dict = None) -> dict:
     """Make a request to the GitHub mock service."""
     headers = {"X-API-Token": token}
@@ -129,4 +151,82 @@ def create_github_tools(github_url: str, github_token: str):
         }
         return f"__PROPOSAL__{json.dumps(proposal)}__END_PROPOSAL__"
 
-    return [github_list_repos, github_get_pull_requests, github_get_commits, github_get_repo_stats, github_create_branch]
+    @tool
+    def github_commit_files(
+        repo_id: str,
+        branch: str,
+        message: str,
+        files,
+    ) -> str:
+        """[WRITE ACTION - REQUIRES APPROVAL] Commit one or more real files to a branch.
+
+        Use this to check in code you have generated. The branch must already
+        exist (create it first with github_create_branch if needed).
+
+        repo_id: repo-1 (payment-service), repo-2 (cart-service), repo-3 (auth-service),
+                 repo-4 (product-service), repo-5 (order-service), or a repo name.
+        branch: the existing branch to commit onto (e.g. feature/PAY-109-crypto-payments).
+        message: the commit message.
+        files: a list of {"path": "<repo-relative path>", "content": "<full file text>"}.
+               Provide the COMPLETE file content for each path (not a diff)."""
+        # Normalize/validate the files argument defensively — the LLM sometimes
+        # passes a JSON string or slightly off shapes.
+        norm = _normalize_files_arg(files)
+        count = len(norm)
+        paths = ", ".join(f["path"] for f in norm) if norm else "(none)"
+        proposal = {
+            "action": "commit_files",
+            "system": "github",
+            "params": {
+                "repo_id": repo_id,
+                "branch": branch,
+                "message": message,
+                "files": norm,
+            },
+            "description": (
+                f"Commit {count} file(s) to '{branch}' in {repo_id}: {paths} "
+                f"— “{message}”"
+            ),
+        }
+        return f"__PROPOSAL__{json.dumps(proposal)}__END_PROPOSAL__"
+
+    @tool
+    def github_open_pull_request(
+        repo_id: str,
+        head: str,
+        base: str = "main",
+        title: str = "",
+        body: str = "",
+    ) -> str:
+        """[WRITE ACTION - REQUIRES APPROVAL] Open a pull request from head into base.
+
+        repo_id: repo-1 (payment-service), repo-2 (cart-service), etc., or a repo name.
+        head: the source branch containing your changes (e.g. feature/PAY-109-crypto-payments).
+        base: the branch to merge into (default: main).
+        title: PR title. body: PR description."""
+        proposal = {
+            "action": "open_pull_request",
+            "system": "github",
+            "params": {
+                "repo_id": repo_id,
+                "head": head,
+                "base": base,
+                "title": title or head,
+                "body": body,
+            },
+            "description": (
+                f"Open PR in {repo_id}: '{head}' → '{base}'"
+                + (f" — “{title}”" if title else "")
+            ),
+        }
+        return f"__PROPOSAL__{json.dumps(proposal)}__END_PROPOSAL__"
+
+    return [
+        github_list_repos,
+        github_get_pull_requests,
+        github_get_commits,
+        github_get_repo_stats,
+        github_create_branch,
+        github_commit_files,
+        github_open_pull_request,
+    ]
