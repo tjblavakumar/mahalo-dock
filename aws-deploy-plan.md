@@ -299,3 +299,85 @@ whether the WorkSpace allows outbound SSH to EC2. If it's blocked:
    open the SSH tunnel (3.5) -> demo from the WorkSpace browser (3.6).
 5. Keep personal-key mode (`LLM_PROVIDER=openrouter`) as a fallback if Bedrock
    access isn't ready yet.
+
+---
+
+## 9. DEPLOYED — live resource inventory (run of 2026-10-14)
+
+> EC2 runbook (section 3) executed end-to-end from the WorkSpace in **Bedrock
+> mode**. The account had **no default VPC**, so a minimal network chain was
+> built first. Everything below is tagged `project=mahalo-dock` for teardown.
+
+### AWS account / auth
+- Account: **051570254217**, region **us-east-1**, SSO profile **`lava`**
+  (`AWSAdministratorAccess`). Re-auth when creds expire:
+  `aws sso login --profile lava` then `aws sts get-caller-identity --profile lava`.
+
+### Resource IDs
+| Resource | ID |
+|---|---|
+| VPC (`10.0.0.0/16`) | `vpc-099ae3ed33442bf5f` |
+| Internet gateway | `igw-0f84d888117821eb6` |
+| Public subnet (`10.0.1.0/24`, us-east-1a) | `subnet-0d60d82fbf18103be` |
+| Route table | `rtb-001ba70697d6f760d` |
+| Security group (inbound TCP 22 from workspace IP only) | `sg-0203b8f626fe1c825` |
+| Key pair | `mahalo-dock-key` (pem: `D:\lavakumar.baskaran\.ssh\mahalo-dock-key.pem`) |
+| IAM role | `mahalo-dock-ec2-role` (Bedrock invoke + SSM core) |
+| Instance profile | `mahalo-dock-ec2-profile` |
+| Instance (t3.medium, Ubuntu 24.04, 30 GB gp3) | `i-0234d7d98744d60b9` |
+| Public IP | `13.223.68.203` |
+
+### Verified
+- Outbound SSH from WorkSpace -> EC2 works (TCP/22 + real authenticated session).
+- Docker Engine 29.9.1 + Compose v5.6.0 installed; stack up, all services healthy,
+  `gitea-bootstrap` Exited(0).
+- **Bedrock tool-calling verified** via Converse (section 7 risk closed):
+  model `us.anthropic.claude-sonnet-4-5-20250929-v1:0` (US inference profile,
+  ACTIVE), authenticated by the instance role — returned `stopReason=tool_use`
+  with a tool call. `.env` set to this id for orchestrator + synthesis.
+- SSH tunnel open from WorkSpace (`-L 3000/3001/8008`); localhost serves the
+  frontend, Gitea UI, and backend health through it.
+
+### Resume / reconnect
+- SSH: `ssh -i D:\lavakumar.baskaran\.ssh\mahalo-dock-key.pem ubuntu@13.223.68.203`
+- Re-open tunnel (keep running during demo):
+  `ssh -i D:\lavakumar.baskaran\.ssh\mahalo-dock-key.pem -N -L 3000:localhost:3000 -L 3001:localhost:3001 -L 8008:localhost:8008 ubuntu@13.223.68.203`
+- App http://localhost:3000 · Gitea http://localhost:3001 (mahalo_admin /
+  MahaloDock123!) · Backend http://localhost:8008/health
+- NOTE: if the WorkSpace egress IP changes, update the SG ingress rule
+  (`sgr-05a70975c83fc8af9`) to the new `/32`, or SSH will stop connecting.
+
+### Stop / teardown
+- Idle: `docker compose down` on EC2, then **Stop** the instance (pay only EBS).
+  Restart: Start instance -> note the NEW public IP -> update SG + tunnel.
+- Full teardown (reverse order): terminate `i-0234d7d98744d60b9`; delete key pair;
+  remove instance profile/role (detach policies first); delete SG; disassociate +
+  delete route table; detach + delete IGW; delete subnet; delete VPC.
+
+---
+
+## 10. BUGFIX — empty AWS_PROFILE broke the Bedrock instance role (2026-10-14)
+
+**Symptom (chatbot):** `ChatBedrockConverse ... Could not load credentials ...
+The config profile () could not be found`.
+
+**Root cause:** base `docker-compose.yml` had
+`- AWS_PROFILE=${AWS_PROFILE:-}` under the backend. With `AWS_PROFILE=` (empty)
+in `.env`, the container got `AWS_PROFILE` **set to an empty string**. boto3
+treats a set-but-empty `AWS_PROFILE` as "use the profile literally named '' ",
+fails to find it, and never falls back to the EC2 instance-role step of the
+credential chain. (`${VAR:-}` only defaults when the var is *unset*; empty is a
+real value and passes straight through.)
+
+**Fix:**
+- `docker-compose.yml`: removed the `AWS_PROFILE=...` line from the backend env.
+  On EC2 the instance role must be used and no profile is wanted.
+- `docker-compose.bedrock.yml`: added the pass-through form `- AWS_PROFILE`
+  (no `=value`) so Compose forwards it ONLY when set non-empty — for the
+  ~/.aws-mount fallback on a WorkSpace. Empty is omitted, keeping the chain clean.
+
+**Applied on the instance** (`sed` out the line) + `docker compose up -d
+--no-deps backend`. Verified: `AWS_PROFILE` now UNSET in the container, and
+`build_orchestrator_llm().invoke(...)` returned a live Bedrock response
+("READY") using instance-role creds. The same edits are in the local repo compose
+files — push them so a future `git pull` on EC2 carries the fix.

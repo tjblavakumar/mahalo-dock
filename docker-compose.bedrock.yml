@@ -20,6 +20,12 @@ services:
     environment:
       - LLM_PROVIDER=bedrock
       - SYNTHESIS_PROVIDER=bedrock
+      # Pass-through form (no "=value"): Compose forwards AWS_PROFILE ONLY when
+      # it is set and non-empty in the host env. An empty value is omitted, so
+      # boto3 falls back through its normal chain instead of failing on a ""
+      # profile. Set AWS_PROFILE in your shell/.env only when the ~/.aws mount
+      # below actually needs a named profile.
+      - AWS_PROFILE
     volumes:
       # Read-only host AWS profile -> container. Default ~/.aws; override with
       # AWS_PROFILE_DIR (e.g. on Windows/WorkSpace: %USERPROFILE%\.aws).

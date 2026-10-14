@@ -37,7 +37,12 @@ services:
       - BEDROCK_ORCHESTRATOR_MODEL=${BEDROCK_ORCHESTRATOR_MODEL:-anthropic.claude-3-5-sonnet-20240620-v1:0}
       - BEDROCK_SYNTHESIS_MODEL=${BEDROCK_SYNTHESIS_MODEL:-anthropic.claude-3-5-sonnet-20240620-v1:0}
       - AWS_REGION=${AWS_REGION:-${BEDROCK_REGION:-us-east-1}}
-      - AWS_PROFILE=${AWS_PROFILE:-}
+      # AWS_PROFILE is intentionally NOT set here. Passing it empty
+      # (AWS_PROFILE=) makes boto3 look up a profile named "" and fail with
+      # "config profile () could not be found", which blocks the EC2 instance
+      # role from being used. When a profile IS needed (e.g. the ~/.aws mount on
+      # a WorkSpace), set it via the bedrock override, which only adds it when
+      # non-empty.
       - MOCK_JIRA_URL=http://mock-jira:5001
       - MOCK_CONFLUENCE_URL=http://mock-confluence:5002
       - MOCK_GITHUB_URL=http://mock-github:5003
