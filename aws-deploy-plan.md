@@ -1,31 +1,42 @@
 # MAHALO-dock — AWS Deployment Plan
 
 > **Purpose of this file.** A self-contained handoff for deploying MAHALO-dock as
-> a **personal, single-user demo** from a company AWS WorkSpace, using **Amazon
-> Bedrock** for the LLM (so no personal LLM keys are spent). It was authored on
-> the local Zorin dev machine (which cannot reach the company AWS). The
-> deployment continues from the **AWS WorkSpace** (Windows 11, full internet,
-> Kiro installed), where this repo is cloned from GitHub. Read it top-to-bottom;
-> it carries the full planning context so a fresh Kiro session on the WorkSpace
-> can continue with zero prior history.
+> a **personal, single-user demo** on **Amazon EC2**, driven from a company AWS
+> WorkSpace, using **Amazon Bedrock** for the LLM (so no personal LLM keys are
+> spent). Authored on the local Zorin dev machine (which cannot reach the company
+> AWS). Work continues from the **AWS WorkSpace** (Windows 11, full internet, AWS
+> console/CLI access, Kiro installed). Read top-to-bottom; it carries the full
+> planning context so a fresh Kiro session can continue with zero prior history.
+
+> **PLAN CHANGE (important).** The original idea was to run Docker directly on the
+> WorkSpace. **That is not possible:** AWS WorkSpaces are themselves virtualized
+> and do **not** support nested virtualization, so Docker Desktop (which needs
+> WSL2/Hyper-V) will not run there. **We therefore run the stack on an EC2 Linux
+> instance** and use the WorkSpace only as the browser + SSH client. The old
+> WorkSpace-Docker runbook is removed; EC2 is now the primary path (section 3).
 
 ---
 
 ## 1. Decision summary (what we agreed)
 
-- **Where it runs:** directly on the **AWS WorkSpace** via Docker Desktop
-  (Win11). No EC2, no SSH, no security groups. The WorkSpace is both the host and
-  the demo browser, so `localhost` URLs work exactly like the local Zorin setup.
-  (EC2 is kept as an optional fallback in section 6, but is NOT the plan.)
-- **LLM:** **Amazon Bedrock**, using the WorkSpace's AWS credentials — so the demo
-  does **not** burn the developer's personal OpenRouter / 1min.ai keys. This
-  requires a code change to add Bedrock as a provider (section 4). Personal keys
-  remain supported as a fallback via a provider switch.
+- **Where it runs:** an **EC2 Linux instance** (Ubuntu) running the existing
+  `docker compose` stack — same as the local Zorin box. The WorkSpace **cannot**
+  run Docker (no nested virtualization), so it serves only as the browser + SSH
+  client to the instance.
+- **How we reach it:** **SSH tunnel** from the WorkSpace to the EC2 instance
+  (`ssh -L ...`). This forwards the stack's ports to the WorkSpace's `localhost`,
+  so **the current `localhost` configuration works unchanged** and **no ports are
+  exposed to the internet** (security group only needs inbound SSH). Browsing on
+  the WorkSpace to `http://localhost:3010` then hits the instance.
+- **LLM:** **Amazon Bedrock**, via an **EC2 instance IAM role** (boto3 reads the
+  role automatically — no keys, no `~/.aws` mount). So the demo does **not** burn
+  personal OpenRouter / 1min.ai keys. Provider switch already built (section 4).
 - **Audience:** demo only, single user. No sharing, no production SLA.
-- **Cost:** personal spend (approved for a company demo). Bedrock is billed per
-  token; running locally on the WorkSpace adds no compute charge.
+- **Cost:** personal spend (approved). ~t3.medium is ~\$30/mo if left on 24/7, but
+  **stop the instance when idle** -> only ~\$2-3/mo EBS. Bedrock billed per token.
 - **Code transfer:** repo is public on GitHub
-  (https://github.com/tjblavakumar/mahalo-dock) -> `git clone` on the WorkSpace.
+  (https://github.com/tjblavakumar/mahalo-dock) -> the EC2 instance `git clone`s
+  it directly from the internet (no file copy from Zorin or the WorkSpace needed).
 
 ### Stack recap (what we're deploying)
 One `docker compose up` brings up: frontend (Next.js), backend (FastAPI +
@@ -33,62 +44,122 @@ LangChain), mock-jira/confluence/servicenow, the mock-github **adapter**
 (GITHUB_MODE=real -> Gitea), gitea (self-hosted git server), one-shot
 gitea-bootstrap. Verified locally end-to-end: the chatbot creates a real branch,
 commits generated code, and opens a PR in Gitea.
-Ports: frontend FRONTEND_PORT (default 3000; 3010 locally), backend 8008, Gitea
-UI 3001, mocks 5001-5004.
+Ports: frontend FRONTEND_PORT (default 3000), backend 8008, Gitea UI 3001, mocks
+5001-5004. On EC2 keep the defaults and map them with the SSH tunnel (section 3.5);
+the browser only needs 3000/3001/8008.
 
 ---
 
-## 2. Prerequisites to confirm on the WorkSpace / AWS (do these first)
+## 2. Prerequisites to confirm (do these first, from the WorkSpace)
 
-- [ ] **Docker Desktop for Windows** can be installed and started (WSL2 backend),
-      and can pull public images (watch for a corporate proxy / SSL inspection; if
-      pulls fail, set Docker Desktop proxy settings).
-- [ ] **Git** installed (or GitHub Desktop).
-- [ ] **Bedrock model access is enabled** in the account + region for a
-      **tool-calling-capable** model (e.g. an Anthropic Claude 3.5+ model). This is
-      a per-model opt-in in the Bedrock console. The orchestrator REQUIRES tool
-      calling, so the chosen model must support it.
-- [ ] The WorkSpace's AWS identity (or a configured profile) can call
-      `bedrock:InvokeModel` / Converse for that model in that region. Verify with:
-      `aws bedrock list-foundation-models --region <region>` and a Converse test.
-- [ ] Decide the **region** (must have the model) and the exact **model id**.
+- [ ] You can launch an **EC2 instance** (console or CLI) in the account/region,
+      and create/attach an **IAM role** (instance profile). If IAM role creation is
+      restricted, see the fallback in section 4 (mount creds / env vars).
+- [ ] You have (or can create) an **EC2 key pair** for SSH, and the private key is
+      available on the WorkSpace.
+- [ ] The WorkSpace can make **outbound SSH (port 22)** to the EC2 instance's
+      public IP (or private IP if WorkSpace + EC2 share routing). *This is the one
+      unknown — corporate network policy may block it. Test early (section 3.6).*
+- [ ] **Bedrock model access is enabled** in the chosen region for a
+      **tool-calling-capable** model (e.g. an Anthropic Claude 3.5+ model) — a
+      per-model opt-in in the Bedrock console. The orchestrator REQUIRES tool
+      calling. Decide the **region** and exact **model id**.
+- [ ] Pick a region that has BOTH EC2 and your Bedrock model.
 
 ---
 
-## 3. Phase 1 runbook — Docker on the WorkSpace (primary path)
+## 3. Primary runbook — EC2 + SSH tunnel + Bedrock
 
-1. Install Docker Desktop + Git on the WorkSpace.
-2. Clone and configure:
-       git clone https://github.com/tjblavakumar/mahalo-dock.git
-       cd mahalo-dock
-       copy .env.example .env
-3. Edit `.env` for Bedrock (after section 4 is built):
-       LLM_PROVIDER=bedrock
-       BEDROCK_REGION=<your-region>
-       BEDROCK_ORCHESTRATOR_MODEL=<tool-calling model id>
-       BEDROCK_SYNTHESIS_MODEL=<model id>     # can match orchestrator
-       # No OPENAI_API_KEY / ONEMIN_API_KEY needed in Bedrock mode.
-       # FRONTEND_PORT=3010                   # only if 3000 is busy
-   Make AWS creds available to the backend container. Simplest on Win11/Docker
-   Desktop: mount the WorkSpace AWS profile read-only and pass region/profile
-   env (to be wired in section 4 / compose). Document the exact mechanism when built.
-4. Start:
-       docker compose up --build -d
-       docker compose ps        # wait healthy; gitea-bootstrap should Exit (0)
-5. Browse on the WorkSpace:
-   - App: http://localhost:3000 (or FRONTEND_PORT)
-   - Gitea UI: http://localhost:3001 (login mahalo_admin / MahaloDock123!)
-6. In the UI, add Connections using Docker **service-name** URLs (the form already
-   prefills these): http://mock-jira:5001, http://mock-confluence:5002,
-   http://mock-github:5003, http://mock-servicenow:5004 (tokens mock-<svc>-token-12345).
-7. Demo: list repos -> create branch -> commit generated code -> open PR -> show
-   it in the Gitea UI.
+### 3.1 Launch the instance
+- AMI: **Ubuntu Server 22.04 or 24.04 LTS** (x86_64).
+- Type: **t3.medium** (2 vCPU / 4 GB) minimum — the Next.js build is memory-hungry
+  and OOMs on smaller. t3.large is safer if available.
+- Storage: **30 GB gp3**.
+- **IAM role / instance profile:** create a role with Bedrock invoke permissions
+  and attach it (so boto3 gets creds automatically). Minimal policy:
+      {
+        "Version": "2012-10-17",
+        "Statement": [{
+          "Effect": "Allow",
+          "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"],
+          "Resource": "*"
+        }]
+      }
+- **Security group:** inbound **TCP 22 (SSH) only**, ideally restricted to the
+  WorkSpace's egress IP. **Do NOT open 3010/8008/3001/5001-5004** — the SSH tunnel
+  handles those. Outbound: allow all (needs internet for git clone, image pulls,
+  Bedrock).
+- Key pair: use/download one you can access from the WorkSpace.
+
+### 3.2 Install Docker + Git on the instance (SSH in first)
+    ssh -i <key.pem> ubuntu@<ec2-public-ip>
+    sudo apt-get update
+    sudo apt-get install -y git ca-certificates curl
+    # Docker Engine + Compose plugin (official convenience script)
+    curl -fsSL https://get.docker.com | sudo sh
+    sudo usermod -aG docker ubuntu
+    # log out/in (or `newgrp docker`) so docker works without sudo
+    exit
+
+### 3.3 Clone + configure
+    ssh -i <key.pem> ubuntu@<ec2-public-ip>
+    git clone https://github.com/tjblavakumar/mahalo-dock.git
+    cd mahalo-dock
+    cp .env.example .env
+    nano .env    # set the Bedrock block (section 4):
+      LLM_PROVIDER=bedrock
+      SYNTHESIS_PROVIDER=bedrock
+      BEDROCK_REGION=<region>
+      BEDROCK_ORCHESTRATOR_MODEL=<tool-calling model id>
+      BEDROCK_SYNTHESIS_MODEL=<model id>   # may match orchestrator
+      # Leave AWS_PROFILE blank — the instance IAM role supplies creds.
+      # FRONTEND_PORT stays 3000 on the server; tunnel maps it locally.
+
+### 3.4 Start the stack
+On EC2, Bedrock creds come from the instance role (no ~/.aws mount needed), so run
+the **base** compose but with the Bedrock providers set in `.env`:
+    docker compose up -d --build
+    docker compose ps     # wait healthy; gitea-bootstrap should Exit (0)
+(If you prefer the override file, note its `~/.aws` mount is harmless but
+unnecessary on EC2; the instance role is used regardless. Base compose already
+reads LLM_PROVIDER/SYNTHESIS_PROVIDER from `.env`.)
+
+### 3.5 Open the SSH tunnel (from the WorkSpace)
+In a WorkSpace terminal (PowerShell/Windows OpenSSH or Git Bash):
+    ssh -i <key.pem> -N \
+      -L 3000:localhost:3000 \
+      -L 3001:localhost:3001 \
+      -L 8008:localhost:8008 \
+      ubuntu@<ec2-public-ip>
+Leave it running during the demo. (`-N` = no remote shell, just forwarding.)
+Note: tunnel the backend (8008) and Gitea UI (3001) too, because the browser calls
+those directly from the WorkSpace. Mocks (5001-5004) are only called server-side
+by the backend, so they do NOT need tunneling.
+
+### 3.6 Demo from the WorkSpace browser
+- App: http://localhost:3000
+- Gitea UI: http://localhost:3001 (login mahalo_admin / MahaloDock123!)
+- Backend health: http://localhost:8008/health
+- Connections: add with Docker **service-name** URLs (form prefills them):
+  http://mock-jira:5001, http://mock-confluence:5002, http://mock-github:5003,
+  http://mock-servicenow:5004 (tokens mock-<svc>-token-12345).
+- Flow: list repos -> create branch -> commit generated code -> open PR -> show it
+  in the Gitea UI.
+
+### 3.7 Stop / cleanup
+- Pause between demos: `docker compose down` on EC2, then **Stop** the instance
+  (console) -> pay only EBS (~\$2-3/mo). Start it again before the next demo.
+- Done for good: **Terminate** the instance and delete the volume.
 
 Caveats:
-- First build compiles the Next.js frontend; needs a few GB free RAM. If it OOMs,
-  close apps or use a larger WorkSpace bundle.
-- If Docker image pulls or Bedrock calls fail, suspect a corporate proxy; configure
-  Docker Desktop proxy and the AWS SDK proxy/region.
+- Because `localhost` config is unchanged, the tunnel ports MUST match the
+  container ports (3000/3001/8008). If 3000 is taken on the WorkSpace, forward a
+  different local port AND update CORS/NEXT_PUBLIC accordingly — simpler to keep
+  3000 free locally.
+- If outbound SSH from the WorkSpace is blocked (section 2), that's the main
+  blocker; options: use AWS Systems Manager **Session Manager** port forwarding
+  instead of raw SSH (no inbound 22 needed), or (least preferred) expose ports via
+  the security group locked to the WorkSpace IP and switch to EC2-host URLs.
 
 ---
 
@@ -159,15 +230,17 @@ right LangChain chat model:
    github tool and return Gitea's payment-service. If Converse tool-call parsing
    differs, adjust the agent loop accordingly.
 
-### AWS credentials into the backend container (options)
-- **Preferred on EC2 (if ever used):** instance IAM role — boto3 picks it up, zero
-  config.
-- **On the WorkSpace:** mount the AWS profile read-only into the container, e.g.
-  `-v %USERPROFILE%\.aws:/root/.aws:ro` (compose volume) and set
-  `AWS_REGION`/`AWS_PROFILE`. Confirm the WorkSpace actually has usable AWS creds
-  on disk / SSO; if it uses SSO, ensure a current `aws sso login` session and that
-  boto3 can use it (may need `AWS_PROFILE` + the SSO cache mounted). **Nail down
-  the exact mechanism during the build and document it.**
+### AWS credentials into the backend container (EC2 path)
+- **Primary (EC2 instance IAM role):** attach a role with Bedrock-invoke to the
+  instance (section 3.1). boto3 resolves it automatically **inside the container**
+  via the EC2 metadata service — **no keys, no `~/.aws` mount, no env**. Just set
+  the Bedrock providers/models in `.env` and run the base compose. This is why
+  EC2 is actually cleaner than the WorkSpace would have been.
+- **Fallback (no role creation allowed):** put temporary creds in the instance's
+  `~/.aws` and run with the override
+  (`-f docker-compose.yml -f docker-compose.bedrock.yml`, which mounts
+  `~/.aws:ro`), or pass `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/
+  `AWS_SESSION_TOKEN` as env to the backend. Rotate/remove when done.
 
 ---
 
@@ -179,28 +252,50 @@ right LangChain chat model:
 
 ---
 
-## 6. Optional fallback: EC2 (NOT the chosen path)
+## 6. If the SSH tunnel is blocked (access fallbacks)
 
-Only if you later want it off the WorkSpace. Ubuntu 22.04/24.04 LTS, t3.medium
-(4 GB RAM for the frontend build), 30 GB gp3, inbound 22 only, instance IAM role
-with Bedrock-invoke. Reach it from the WorkSpace via SSH tunnel
-(`ssh -L 3010:localhost:3010 -L 3001:localhost:3001 -L 8008:localhost:8008 ...`) so
-localhost config keeps working. Install docker + git, clone, `.env`, `docker
-compose up -d`. Stop the instance when idle (~$2-3/mo EBS); terminate when done.
-Open item: confirm the WorkSpace can SSH to EC2 and reach its ports.
+The SSH tunnel (section 3.5) is the primary access method and the one unknown is
+whether the WorkSpace allows outbound SSH to EC2. If it's blocked:
+
+- **AWS Systems Manager Session Manager (recommended fallback):** install the SSM
+  agent (preinstalled on Ubuntu AMIs) + give the instance role `AmazonSSMManaged
+  InstanceCore`. Then from the WorkSpace (with AWS CLI + Session Manager plugin):
+      aws ssm start-session --target <instance-id> \
+        --document-name AWS-StartPortForwardingSession \
+        --parameters '{"portNumber":["3000"],"localPortNumber":["3000"]}'
+  Repeat for 3001 and 8008 (or use a multi-port document). No inbound 22, no
+  public IP needed — traffic goes through SSM over HTTPS, which corporate networks
+  usually allow.
+- **Public ports locked to the WorkSpace IP (least preferred):** open
+  3000/3001/8008 in the security group to the WorkSpace's egress IP only, browse
+  `http://<ec2-ip>:3000` directly. This DROPS the localhost assumption, so you must
+  set `NEXT_PUBLIC_API_URL=http://<ec2-ip>:8008`, `GITEA_PUBLIC_URL=http://<ec2-ip>:3001`,
+  `GITEA_ROOT_URL=http://<ec2-ip>:3001/`, and add that origin to `CORS_ORIGINS`,
+  then rebuild the frontend. More moving parts; avoid unless the tunnel and SSM
+  are both unavailable.
 
 ---
 
 ## 7. Open items / decisions
-- [ ] Confirm Docker Desktop runs on the WorkSpace and can pull images (proxy?).
-- [ ] Confirm Bedrock model access + region + exact tool-calling model id.
-- [ ] Confirm how the WorkSpace provides AWS creds to boto3 (profile file / SSO).
-- [ ] Verify Bedrock Converse tool-calling end-to-end (section 4, task 7).
-- [ ] Company policy OK (developer states yes, personal spend).
+- [x] WorkSpace cannot run Docker (no nested virtualization) -> use EC2. (decided)
+- [x] Bedrock provider code built + unit-tested on Zorin (section 4).
+- [ ] Can create/attach an EC2 instance IAM role (else use the creds fallback).
+- [ ] **Can the WorkSpace SSH (outbound 22) to EC2?** If not -> SSM port
+      forwarding (section 6). This is the main access unknown.
+- [ ] Bedrock model access enabled + region + exact tool-calling model id.
+- [ ] **Verify Bedrock Converse tool-calling end-to-end** on EC2 (the key risk):
+      "List my repositories" must hit the github tool and return Gitea's
+      payment-service. If Converse tool-call shape differs from OpenAI, adjust the
+      agent loop in `backend/app/agent/agent.py`.
 
-## 8. How to resume on the WorkSpace
-1. Install Docker Desktop + Git; `git clone` the repo; open it in Kiro.
-2. Tell Kiro: "Read aws-deploy-plan.md and build the Bedrock provider (section 4),
-   then run Phase 1 (section 3)."
-3. Build + verify Bedrock (section 4) -> run the stack on the WorkSpace (section 3)
-   -> demo. Keep personal-key mode as a fallback if Bedrock access isn't ready.
+## 8. How to resume (on the WorkSpace / against EC2)
+1. Launch EC2 (section 3.1), SSH in, install Docker + Git (3.2).
+2. `git clone` the repo on the instance; open it in Kiro **on the WorkSpace** if
+   you want Kiro to help (Kiro edits the WorkSpace clone; deploy by pushing to
+   GitHub and `git pull` on EC2, or edit directly on EC2 over SSH).
+3. Tell Kiro: "Read aws-deploy-plan.md and run the EC2 runbook (section 3) in
+   Bedrock mode; verify Bedrock tool-calling (section 7)."
+4. `.env` with the Bedrock block -> `docker compose up -d --build` on EC2 ->
+   open the SSH tunnel (3.5) -> demo from the WorkSpace browser (3.6).
+5. Keep personal-key mode (`LLM_PROVIDER=openrouter`) as a fallback if Bedrock
+   access isn't ready yet.
