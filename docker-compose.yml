@@ -1,0 +1,98 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8008:8008"
+    environment:
+      - DATABASE_URL=sqlite:///./mahalo3.db
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-key-change-me}
+      - JWT_ALGORITHM=HS256
+      - JWT_EXPIRATION_MINUTES=60
+      - CORS_ORIGINS=http://localhost:3000
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - MOCK_JIRA_URL=http://mock-jira:5001
+      - MOCK_CONFLUENCE_URL=http://mock-confluence:5002
+      - MOCK_GITHUB_URL=http://mock-github:5003
+      - MOCK_SERVICENOW_URL=http://mock-servicenow:5004
+    volumes:
+      - backend-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    depends_on: []
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8008
+    depends_on:
+      - backend
+
+  mock-jira:
+    build:
+      context: ./mock-services/jira
+      dockerfile: Dockerfile
+    ports:
+      - "5001:5001"
+    environment:
+      - MOCK_JIRA_TOKEN=${MOCK_JIRA_TOKEN:-mock-jira-token-12345}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  mock-confluence:
+    build:
+      context: ./mock-services/confluence
+      dockerfile: Dockerfile
+    ports:
+      - "5002:5002"
+    environment:
+      - MOCK_CONFLUENCE_TOKEN=${MOCK_CONFLUENCE_TOKEN:-mock-confluence-token-12345}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  mock-github:
+    build:
+      context: ./mock-services/github
+      dockerfile: Dockerfile
+    ports:
+      - "5003:5003"
+    environment:
+      - MOCK_GITHUB_TOKEN=${MOCK_GITHUB_TOKEN:-mock-github-token-12345}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  mock-servicenow:
+    build:
+      context: ./mock-services/servicenow
+      dockerfile: Dockerfile
+    ports:
+      - "5004:5004"
+    environment:
+      - MOCK_SERVICENOW_TOKEN=${MOCK_SERVICENOW_TOKEN:-mock-servicenow-token-12345}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5004/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  backend-data:

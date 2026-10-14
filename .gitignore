@@ -1,0 +1,55 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Database / local runtime data
+*.db
+*.sqlite3
+.pids/
+backend/mahalo3.db
+backend/.env
+frontend/.env.local
+
+# Mock service persistent stores (runtime state, seeded from seed_data.py)
+mock-services/*/data.json
+mock-services/*/data.json.tmp
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+coverage/
+.npm/
+.yarn/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Docker / local state
+*.pid
+
+# Build output
+build/
+dist/
