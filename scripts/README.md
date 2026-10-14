@@ -4,6 +4,72 @@ One-shot provisioning for the MAHALO-dock demo on EC2 + Bedrock, driven from the
 Windows AWS WorkSpace. Built to be re-run after the monthly account reset. See
 `../aws-deploy-plan.md` for the full design and rationale.
 
+## What each script does (read this first)
+
+The three scripts do different jobs. The one that confuses people is the tunnel,
+so here is the mental model.
+
+| Script | Touches | Analogy |
+|---|---|---|
+| `deploy-aws.ps1` | Builds the AWS infra **and** installs/runs the app | Build the house and move in |
+| `open-tunnel.ps1` | Nothing on AWS — only your **local** connection | Open a private door to peek inside |
+| `teardown-aws.ps1 -StopOnly` | **Stops** the instance (infra + data kept) | Lock up and leave (house stays) |
+| `teardown-aws.ps1` (no flag) | **Deletes** everything | Demolish the house |
+
+### Why a tunnel is needed
+For security, the app's ports are **NOT exposed to the internet**. The security
+group allows inbound **SSH (port 22) from your WorkSpace IP only** — nothing
+else can reach the instance from outside. So after `deploy-aws.ps1`, the app is
+running on EC2, but you still cannot open `http://<ec2-ip>:3000` in a browser:
+that port is firewalled off.
+
+The SSH tunnel is the bridge. It reuses the one allowed port (22) to forward the
+app's ports to your WorkSpace's `localhost`:
+
+```
+Your browser                         SSH tunnel (port 22)              EC2 instance
+http://localhost:3000  ───────────────────────────────────────▶      frontend (3000)
+http://localhost:3001  ──── all over the single SSH connection ─▶      Gitea    (3001)
+http://localhost:8008  ────────────────────────────────────────▶      backend  (8008)
+```
+
+While the tunnel is open, `http://localhost:3000` on the WorkSpace actually hits
+the frontend on EC2. Close the tunnel and `localhost:3000` stops working — the
+app keeps running on EC2, you just lose your private window into it. That is why
+you run `deploy` rarely (once per reset) but `open-tunnel` **every time** you sit
+down to demo.
+
+**Important:** `teardown-aws.ps1` **deletes** by default — it does not merely
+stop things. Use `-StopOnly` when you just want to pause between demos.
+
+### Typical sequences
+
+First time each month (after the reset wipes everything):
+```powershell
+aws sso login --profile lava        # 1. authenticate
+pwsh ./scripts/deploy-aws.ps1       # 2. build infra + deploy app (several min)
+pwsh ./scripts/open-tunnel.ps1      # 3. separate terminal; your window into the app
+# 4. browse http://localhost:3000 and demo; keep the tunnel terminal open
+```
+
+Done with a demo (pause to save money):
+```powershell
+# Ctrl+C in the tunnel terminal (closes your window; app still runs)
+pwsh ./scripts/teardown-aws.ps1 -StopOnly
+```
+
+Next demo the same month (instance only stopped, app still there):
+```powershell
+aws sso login --profile lava        # if the session expired
+pwsh ./scripts/open-tunnel.ps1      # detects the stopped instance, offers to start it, then tunnels
+# No deploy needed — you skip straight to demoing.
+```
+
+End of month / clean slate:
+```powershell
+pwsh ./scripts/teardown-aws.ps1     # fully deletes everything (the monthly reset would too)
+```
+
 ## Prerequisites (on the WorkSpace)
 - AWS CLI v2 and the OpenSSH client (`ssh`, `scp`) on PATH
 - A valid SSO session:
