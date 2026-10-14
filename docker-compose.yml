@@ -6,12 +6,27 @@ services:
     ports:
       - "8008:8008"
     environment:
-      - DATABASE_URL=sqlite:///./mahalo3.db
+      # Persist the SQLite DB in the mounted volume so users/data survive
+      # container recreation. Hardcoded (no ${..} substitution) so a stale
+      # DATABASE_URL exported in the host shell can't override it.
+      - DATABASE_URL=sqlite:////app/data/mahalo3.db
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-key-change-me}
       - JWT_ALGORITHM=HS256
       - JWT_EXPIRATION_MINUTES=60
-      - CORS_ORIGINS=http://localhost:3000
+      # Allow the frontend origin. Defaults cover both the standard port (3000)
+      # and the common alternate (3010); override via CORS_ORIGINS in .env
+      # (comma-separated) if you expose the frontend on a different port/host.
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3010}
+      # LLM configuration (sourced from .env). The orchestrator needs these to
+      # reach the right provider/model; without them it falls back to code
+      # defaults (OpenAI gpt-4o) and ignores your .env.
+      - ORCHESTRATOR_MODEL=${ORCHESTRATOR_MODEL:-gpt-4o}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - SYNTHESIS_PROVIDER=${SYNTHESIS_PROVIDER:-onemin}
+      - SYNTHESIS_MODEL=${SYNTHESIS_MODEL:-gpt-4o}
+      - ONEMIN_API_KEY=${ONEMIN_API_KEY:-}
+      - ONEMIN_BASE_URL=${ONEMIN_BASE_URL:-https://api.1min.ai}
       - MOCK_JIRA_URL=http://mock-jira:5001
       - MOCK_CONFLUENCE_URL=http://mock-confluence:5002
       - MOCK_GITHUB_URL=http://mock-github:5003

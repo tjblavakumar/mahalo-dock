@@ -106,14 +106,18 @@ Open the frontend, then:
 
 1. **Register** at `/register` (pick a role: Product Manager, Developer, or Executive).
 2. **Login** at `/login`.
-3. **Connect integrations** on the Connections page (`/connections`) using these
-   browser-reachable host URLs:
-   - Jira — URL `http://localhost:5001`, Token `mock-jira-token-12345`
-   - Confluence — URL `http://localhost:5002`, Token `mock-confluence-token-12345`
-   - GitHub — URL `http://localhost:5003`, Token `mock-github-token-12345`
-   - ServiceNow — URL `http://localhost:5004`, Token `mock-servicenow-token-12345`
+3. **Connect integrations** on the Connections page (`/connections`). The
+   **backend** (inside Docker) is what calls these services, so use the Docker
+   **service-name** URLs — not `localhost` (from inside the backend container,
+   `localhost` is the backend itself, not the mock):
+   - Jira — URL `http://mock-jira:5001`, Token `mock-jira-token-12345`
+   - Confluence — URL `http://mock-confluence:5002`, Token `mock-confluence-token-12345`
+   - GitHub — URL `http://mock-github:5003`, Token `mock-github-token-12345`
+   - ServiceNow — URL `http://mock-servicenow:5004`, Token `mock-servicenow-token-12345`
 
-   (These tokens are the local demo defaults from `.env.example`.)
+   (These tokens are the local demo defaults from `.env.example`. If you run the
+   services **without Docker** — the manual path below — use `http://localhost:500x`
+   instead, since then the backend runs on your host.)
 
 ### 6. Demo script — real code check-in to Gitea
 

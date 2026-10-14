@@ -19,6 +19,12 @@ venv/
 **/.env
 **/.env.*
 !**/.env.example
+# Backups/copies of env files (may contain real secrets — never commit)
+*.env
+bkp.env
+*.env.bak
+*.env.backup
+env.bak
 
 # Database / local runtime data
 *.db

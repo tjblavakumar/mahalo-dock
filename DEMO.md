@@ -15,12 +15,15 @@
    - `pm@demo.io` / `demo123` / Alice Product / Product Manager
    - `dev@demo.io` / `demo123` / Marcus Chen / Developer
    - `exec@demo.io` / `demo123` / Sarah Executive / Executive
-3. For each user, go to Connections and add the integrations (host URLs):
-   - Jira: `http://localhost:5001` / token: `mock-jira-token-12345`
-   - Confluence: `http://localhost:5002` / token: `mock-confluence-token-12345`
-   - GitHub: `http://localhost:5003` / token: `mock-github-token-12345`
-   - ServiceNow: `http://localhost:5004` / token: `mock-servicenow-token-12345`
+3. For each user, go to Connections and add the integrations. When running via
+   **Docker**, use the Docker **service-name** URLs (the backend, not your
+   browser, connects to these):
+   - Jira: `http://mock-jira:5001` / token: `mock-jira-token-12345`
+   - Confluence: `http://mock-confluence:5002` / token: `mock-confluence-token-12345`
+   - GitHub: `http://mock-github:5003` / token: `mock-github-token-12345`
+   - ServiceNow: `http://mock-servicenow:5004` / token: `mock-servicenow-token-12345`
 
+   > (Running without Docker instead? Use `http://localhost:500x`.)
    > The GitHub adapter is backed by Gitea in real mode — browse it at
    > http://localhost:3001 (login `mahalo_admin` / `MahaloDock123!`).
 
