@@ -19,7 +19,9 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3010}
       # LLM configuration (sourced from .env). The orchestrator needs these to
       # reach the right provider/model; without them it falls back to code
-      # defaults (OpenAI gpt-4o) and ignores your .env.
+      # defaults and ignores your .env.
+      # LLM_PROVIDER: openrouter | openai | bedrock
+      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
       - ORCHESTRATOR_MODEL=${ORCHESTRATOR_MODEL:-gpt-4o}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
@@ -27,12 +29,25 @@ services:
       - SYNTHESIS_MODEL=${SYNTHESIS_MODEL:-gpt-4o}
       - ONEMIN_API_KEY=${ONEMIN_API_KEY:-}
       - ONEMIN_BASE_URL=${ONEMIN_BASE_URL:-https://api.1min.ai}
+      # Amazon Bedrock (used when LLM_PROVIDER/SYNTHESIS_PROVIDER=bedrock).
+      # No API key: boto3 resolves creds from the standard AWS chain. On a host
+      # with a ~/.aws profile (e.g. the AWS WorkSpace), the volume mount below
+      # exposes it to the container; AWS_PROFILE/AWS_REGION select it.
+      - BEDROCK_REGION=${BEDROCK_REGION:-us-east-1}
+      - BEDROCK_ORCHESTRATOR_MODEL=${BEDROCK_ORCHESTRATOR_MODEL:-anthropic.claude-3-5-sonnet-20240620-v1:0}
+      - BEDROCK_SYNTHESIS_MODEL=${BEDROCK_SYNTHESIS_MODEL:-anthropic.claude-3-5-sonnet-20240620-v1:0}
+      - AWS_REGION=${AWS_REGION:-${BEDROCK_REGION:-us-east-1}}
+      - AWS_PROFILE=${AWS_PROFILE:-}
       - MOCK_JIRA_URL=http://mock-jira:5001
       - MOCK_CONFLUENCE_URL=http://mock-confluence:5002
       - MOCK_GITHUB_URL=http://mock-github:5003
       - MOCK_SERVICENOW_URL=http://mock-servicenow:5004
     volumes:
       - backend-data:/app/data
+      # NOTE: Bedrock mode (LLM_PROVIDER=bedrock) needs AWS credentials in the
+      # container. That's added via the opt-in override docker-compose.bedrock.yml
+      # (mounts your ~/.aws read-only), so the base stack stays free of a bind
+      # mount that may not exist on every host.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
       interval: 10s

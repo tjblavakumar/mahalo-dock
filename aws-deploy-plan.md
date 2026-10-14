@@ -94,6 +94,30 @@ Caveats:
 
 ## 4. Feature to build FIRST: Bedrock as an LLM provider
 
+> **STATUS: BUILT (on Zorin) + unit-tested. One thing left: verify real Bedrock
+> tool-calling on the WorkSpace.** What's done: a provider switch
+> `LLM_PROVIDER=openrouter|openai|bedrock` via `backend/app/agent/llm_factory.py`
+> (`build_orchestrator_llm` / `build_synthesis_llm`), used by `agent.py` and
+> `synthesis.py`; config + `validate_llm_config` (bedrock needs no OpenAI key);
+> `langchain-aws` + `boto3` added (version-bounded to avoid pip backtracking);
+> `docker-compose.bedrock.yml` override (sets provider=bedrock + mounts
+> `~/.aws`); `.env.example` documented; `backend/tests/test_llm_factory.py` (full
+> suite 30 passed). Verified in-image: `ChatBedrockConverse` imports, bedrock
+> validates with empty OPENAI_API_KEY, openrouter still builds ChatOpenAI.
+>
+> **Remaining on the WorkSpace:** (a) enable Bedrock model access + confirm
+> region/model id; (b) make AWS creds reachable (AWS_PROFILE[_DIR]); (c) run and
+> confirm the orchestrator actually tool-calls through Bedrock Converse end to
+> end ("List my repositories" -> github tool -> Gitea's payment-service). If
+> Converse tool-call parsing differs from OpenAI, adjust the agent loop.
+>
+> To run in Bedrock mode:
+>     # .env: LLM_PROVIDER=bedrock, SYNTHESIS_PROVIDER=bedrock, BEDROCK_REGION,
+>     #       BEDROCK_ORCHESTRATOR_MODEL, BEDROCK_SYNTHESIS_MODEL, AWS_PROFILE
+>     docker compose -f docker-compose.yml -f docker-compose.bedrock.yml up -d --build
+>
+> The subsections below are the original design notes (now implemented).
+
 This is the one real code change the AWS demo needs. Build + test it (locally is
 fine, if you have any AWS creds; otherwise on the WorkSpace) before relying on it.
 

@@ -11,33 +11,11 @@ import logging
 from typing import Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 
+from app.agent.llm_factory import build_synthesis_llm
 from app.agent.markup_utils import clean_tool_markup
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
-
-
-def _build_synthesis_llm():
-    """Construct the synthesis LLM based on the configured provider."""
-    provider = settings.synthesis_provider
-    if provider == "onemin":
-        from app.agent.onemin_llm import OneMinAIChatModel
-
-        return OneMinAIChatModel(
-            api_key=settings.onemin_api_key,
-            base_url=settings.onemin_base_url.rstrip("/v1").rstrip("/"),
-            model=settings.synthesis_model,
-            temperature=0.2,
-        )
-    # Default / fallback: OpenAI
-    return ChatOpenAI(
-        model=settings.synthesis_model,
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-        temperature=0.2,
-    )
 
 
 def synthesize_response(
@@ -56,7 +34,7 @@ def synthesize_response(
         return orchestrator_answer
 
     try:
-        llm = _build_synthesis_llm()
+        llm = build_synthesis_llm(temperature=0.2)
         instruction = (
             f"You are MAHALO3, an AI assistant for a {role.replace('_', ' ')}. "
             f"Your role is purely to synthesize and rephrase the provided answer into a clean, "

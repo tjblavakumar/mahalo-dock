@@ -33,21 +33,40 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
 
     # ── LLM Configuration ─────────────────────────────
-    # Orchestrator (tool-calling brain): ALWAYS OpenAI. It needs native function
-    # calling, which only the OpenAI-compatible /chat/completions path provides.
+    # Orchestrator provider (the tool-calling brain). It must support native
+    # function/tool calling. Supported:
+    #   openrouter | openai  -> OpenAI-compatible endpoint (ChatOpenAI)
+    #   bedrock              -> Amazon Bedrock (ChatBedrockConverse); creds come
+    #                           from the standard AWS chain, no API key needed.
+    # "openai" is accepted as an alias for the OpenAI-compatible path.
+    llm_provider: str = "openrouter"
+
+    # Model used by the orchestrator. For openrouter/openai this is an
+    # OpenAI-style id (e.g. "openai/gpt-5-nano"); unused in bedrock mode (see
+    # bedrock_orchestrator_model).
     orchestrator_model: str = "gpt-4o"
 
     # Synthesis (final response phrasing): switchable provider.
-    synthesis_provider: str = "onemin"  # "onemin" | "openai"
+    #   onemin | openai | bedrock
+    synthesis_provider: str = "onemin"
     synthesis_model: str = "gpt-4o"
 
-    # OpenAI credentials (required — orchestrator depends on these)
+    # OpenAI / OpenAI-compatible credentials (required for openrouter/openai
+    # providers; NOT required in bedrock mode).
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
 
     # 1min.ai credentials (required when synthesis_provider == "onemin")
     onemin_api_key: str = ""
     onemin_base_url: str = "https://api.1min.ai"
+
+    # Amazon Bedrock (used when llm_provider/synthesis_provider == "bedrock").
+    # No API key: boto3 resolves credentials from the standard AWS chain
+    # (instance role, env vars, or a mounted ~/.aws profile).
+    bedrock_region: str = "us-east-1"
+    # Tool-calling-capable model id (e.g. an Anthropic Claude 3.5+ Bedrock id).
+    bedrock_orchestrator_model: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    bedrock_synthesis_model: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
 
     # Mock Services
     mock_jira_url: str = "http://localhost:5001"
@@ -69,36 +88,53 @@ class Settings(BaseSettings):
     def validate_llm_config(self) -> None:
         """Validate LLM configuration and normalize switchable options.
 
-        - Orchestrator always requires an OpenAI API key (fail fast).
-        - synthesis_provider must be one of the supported values; unknown
-          values fall back to "openai" with a warning.
-        - If synthesis is set to "onemin" but no 1min.ai key is configured,
-          fall back to OpenAI synthesis so the demo still works.
+        - Normalize ``llm_provider`` (openrouter | openai | bedrock); unknown
+          values fall back to "openrouter" with a warning.
+        - The orchestrator requires an OpenAI API key ONLY for the OpenAI-
+          compatible providers (openrouter/openai). In bedrock mode no key is
+          needed (boto3 resolves AWS credentials).
+        - synthesis_provider must be onemin | openai | bedrock; unknown values
+          fall back to "openai" with a warning.
+        - If synthesis is "onemin" but no 1min.ai key is configured, fall back to
+          OpenAI synthesis so the demo still works.
         """
-        if not self.openai_api_key or self.openai_api_key.startswith("sk-your-"):
-            raise RuntimeError(
-                "OPENAI_API_KEY is not configured. The orchestrator requires a "
-                "valid OpenAI API key for tool calling. Set OPENAI_API_KEY in .env."
+        provider = (self.llm_provider or "").strip().lower()
+        if provider not in ("openrouter", "openai", "bedrock"):
+            logger.warning(
+                "Unknown LLM_PROVIDER '%s'; falling back to 'openrouter'.",
+                self.llm_provider,
             )
+            provider = "openrouter"
+        self.llm_provider = provider
 
-        provider = (self.synthesis_provider or "").strip().lower()
-        if provider not in ("onemin", "openai"):
+        # OpenAI key only required for the OpenAI-compatible orchestrator paths.
+        if provider in ("openrouter", "openai"):
+            if not self.openai_api_key or self.openai_api_key.startswith("sk-your-"):
+                raise RuntimeError(
+                    "OPENAI_API_KEY is not configured. The orchestrator "
+                    f"(LLM_PROVIDER={provider}) requires a valid OpenAI-compatible "
+                    "API key for tool calling. Set OPENAI_API_KEY in .env, or use "
+                    "LLM_PROVIDER=bedrock."
+                )
+
+        syn = (self.synthesis_provider or "").strip().lower()
+        if syn not in ("onemin", "openai", "bedrock"):
             logger.warning(
                 "Unknown SYNTHESIS_PROVIDER '%s'; falling back to 'openai'.",
                 self.synthesis_provider,
             )
-            provider = "openai"
+            syn = "openai"
 
-        if provider == "onemin" and (
+        if syn == "onemin" and (
             not self.onemin_api_key or self.onemin_api_key.startswith("your-")
         ):
             logger.warning(
                 "SYNTHESIS_PROVIDER=onemin but ONEMIN_API_KEY is not configured; "
                 "falling back to OpenAI for synthesis."
             )
-            provider = "openai"
+            syn = "openai"
 
-        self.synthesis_provider = provider
+        self.synthesis_provider = syn
 
 
 settings = Settings()

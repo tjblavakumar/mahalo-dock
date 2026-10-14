@@ -6,9 +6,9 @@ import uuid
 from typing import Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langchain_openai import ChatOpenAI
 from sqlalchemy.orm import Session
 
+from app.agent.llm_factory import build_orchestrator_llm
 from app.agent.markup_utils import clean_tool_markup, parse_text_tool_calls
 from app.agent.prompts import ROLE_PROMPTS
 from app.agent.session import ChatMessage, ChatSession, get_or_create_session
@@ -253,14 +253,10 @@ async def chat(
     )
     system_prompt += f"\n\nProject context:\n{project_context}\n"
 
-    # Initialize the orchestrator LLM. This is ALWAYS OpenAI: it needs native
-    # function calling to decide which tools to invoke from the user's intent.
-    llm = ChatOpenAI(
-        model=settings.orchestrator_model,
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-        temperature=0.1,
-    )
+    # Initialize the orchestrator LLM via the provider factory. It needs native
+    # tool calling to decide which tools to invoke from the user's intent
+    # (OpenAI-compatible or Bedrock Converse, per LLM_PROVIDER).
+    llm = build_orchestrator_llm(temperature=0.1)
     # Bind tools if available
     if tools:
         llm_with_tools = llm.bind_tools(tools)
@@ -455,8 +451,11 @@ async def generate_suggestions(
     """
     integrations = _get_user_integrations(user.id, db)
 
-    # No key configured -> deterministic fallback (mirrors the demo agent path).
-    if not settings.openai_api_key:
+    # No usable LLM -> deterministic fallback (mirrors the demo agent path).
+    # For OpenAI-compatible providers that means no API key; Bedrock uses the AWS
+    # credential chain, so we don't gate it on an OpenAI key.
+    provider = (settings.llm_provider or "openrouter").strip().lower()
+    if provider != "bedrock" and not settings.openai_api_key:
         return _fallback_suggestions(user.role.value, integrations, limit)
 
     role_prompt = ROLE_PROMPTS.get(user.role.value, ROLE_PROMPTS["developer"])
@@ -480,12 +479,7 @@ async def generate_suggestions(
     )
 
     try:
-        llm = ChatOpenAI(
-            model=settings.orchestrator_model,
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            temperature=0.4,
-        )
+        llm = build_orchestrator_llm(temperature=0.4)
         response = await llm.ainvoke(
             [SystemMessage(content=system_prompt), HumanMessage(content=instruction)]
         )

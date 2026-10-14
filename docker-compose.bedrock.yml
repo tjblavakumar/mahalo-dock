@@ -1,0 +1,26 @@
+# Bedrock override: run the backend's LLM on Amazon Bedrock using the host's
+# AWS credentials — no personal OpenRouter/1min.ai keys spent.
+#
+# Usage (layer on top of the base compose):
+#   docker compose -f docker-compose.yml -f docker-compose.bedrock.yml up -d --build
+#
+# Prerequisites on the host:
+#   - A working AWS identity with Bedrock InvokeModel/Converse access, available
+#     as a profile under ~/.aws (or set AWS_PROFILE_DIR to its location).
+#   - Bedrock model access enabled for a TOOL-CALLING model (e.g. Anthropic
+#     Claude 3.5+) in BEDROCK_REGION.
+#   - In .env: LLM_PROVIDER=bedrock, SYNTHESIS_PROVIDER=bedrock, BEDROCK_REGION,
+#     BEDROCK_ORCHESTRATOR_MODEL, BEDROCK_SYNTHESIS_MODEL, and AWS_PROFILE if the
+#     profile isn't "default".
+#
+# This override only adds the AWS credential mount; all Bedrock env vars are
+# already wired in the base backend service and sourced from .env.
+services:
+  backend:
+    environment:
+      - LLM_PROVIDER=bedrock
+      - SYNTHESIS_PROVIDER=bedrock
+    volumes:
+      # Read-only host AWS profile -> container. Default ~/.aws; override with
+      # AWS_PROFILE_DIR (e.g. on Windows/WorkSpace: %USERPROFILE%\.aws).
+      - ${AWS_PROFILE_DIR:-~/.aws}:/root/.aws:ro
