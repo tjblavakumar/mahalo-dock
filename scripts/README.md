@@ -36,6 +36,15 @@ pwsh ./scripts/deploy-aws.ps1 -Profile lava -Region us-east-1 -InstanceType t3.l
 ```
 
 ## Open the tunnel (separate terminal, keep open)
+Easiest — resolves the instance IP by tag automatically:
+```powershell
+pwsh ./scripts/open-tunnel.ps1
+```
+It finds the running `mahalo-dock` instance (offers to start it if stopped),
+warns if TCP 22 isn't reachable (usually a changed egress IP → re-run deploy),
+and opens the tunnel. Leave it running; Ctrl+C closes it.
+
+Manual equivalent, if you prefer:
 ```powershell
 ssh -i "$env:USERPROFILE\.ssh\mahalo-dock-key.pem" -N `
   -L 3000:localhost:3000 -L 3001:localhost:3001 -L 8008:localhost:8008 `
