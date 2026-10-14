@@ -1,16 +1,28 @@
-# MAHALO3 — Demo Scenarios
+# MAHALO-dock — Demo Scenarios
 
 ## Setup (All Personas)
 
-1. Start all services (see README.md)
+1. Start the stack with Docker (see `README.md`):
+
+   ```bash
+   cp .env.example .env   # add your LLM key(s)
+   docker compose up --build
+   ```
+
+   This brings up the frontend, backend, mock Jira/Confluence/ServiceNow, the
+   GitHub adapter (real/Gitea mode by default), and Gitea itself.
 2. Register 3 users at http://localhost:3000/register:
    - `pm@demo.io` / `demo123` / Alice Product / Product Manager
    - `dev@demo.io` / `demo123` / Marcus Chen / Developer
    - `exec@demo.io` / `demo123` / Sarah Executive / Executive
-3. For each user, go to Connections and add all 3 integrations:
+3. For each user, go to Connections and add the integrations (host URLs):
    - Jira: `http://localhost:5001` / token: `mock-jira-token-12345`
    - Confluence: `http://localhost:5002` / token: `mock-confluence-token-12345`
    - GitHub: `http://localhost:5003` / token: `mock-github-token-12345`
+   - ServiceNow: `http://localhost:5004` / token: `mock-servicenow-token-12345`
+
+   > The GitHub adapter is backed by Gitea in real mode — browse it at
+   > http://localhost:3001 (login `mahalo_admin` / `MahaloDock123!`).
 
 ---
 
@@ -86,6 +98,22 @@
 
 ---
 
+## Scenario 4: Check in real code to Gitea (real mode)
+
+**Login as**: dev@demo.io (Developer). Requires the default `GITHUB_MODE=real`.
+
+**Ask**: "Write a coupon validation module and commit it to feature/PAY-109-crypto-payments on payment-service"
+**Expected**: Agent generates the code and proposes a **commit of real file contents** →
+Approve → files are committed to that branch in Gitea.
+
+**Ask**: "Open a pull request from that branch into main"
+**Expected**: Agent proposes a PR → Approve → the reply includes a clickable PR link.
+
+**Verify**: Open http://localhost:3001 and view the branch, the committed file, and the
+open PR in the Gitea web UI.
+
+---
+
 ## Key Demo Points
 
 1. **Multi-system correlation**: One question triggers queries to multiple systems
@@ -94,3 +122,5 @@
 4. **Persona-aware responses**: Agent frames responses differently per role
 5. **Systems queried badges**: Shows which systems were consulted
 6. **Live mock data**: Rich e-commerce scenario with realistic stories, docs, PRs
+7. **Real git operations**: In real mode, branches/commits/PRs are created in a
+   live Gitea server and are viewable in its web UI (http://localhost:3001)

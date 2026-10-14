@@ -253,11 +253,17 @@
     gitignored): **no** real-secret matches (sk-/sk-or-v1-/AKIA/ghp_/PRIVATE
     KEY); a second credential-assignment pass found only benign code refs and
     the intended local demo creds. `.env` + `backend/.env` confirmed untracked.
-  - ⬜ **Remaining (needs user):** `gh repo create MAHALO-dock ...`, push clean
-    history to a branch with `-u`. Re-grep staged files right before push.
-  - ⬜ **Also pending:** refresh stale root docs that still describe MAHALO3
-    (`SPEC.md`, `ARCHITECTURE.md`, `DEMO.md`, `PROGRESS.md`) — README.md already
-    updated in Task 9.
+  - ✅ **Published** (user created the repo + pre-authorized gh): remote
+    `origin` → https://github.com/tjblavakumar/mahalo-dock (PUBLIC, was empty).
+    Committed the dockerization work as `c9156fe` on top of the clean initial
+    import `b5a2de9`; `git push -u origin master`. Final staged-tree secret scan
+    before commit was clean (only false positive = the pattern list in this
+    progress doc). **Post-push verification:** remote `.env` → "Not Found"
+    (correctly excluded), `.env.example` present with `SYNTHESIS_MODEL=
+    deepseek-flash`. gh auth = account `tjblavakumar`, scopes incl. `repo`.
+  - ⬜ **Still pending (optional):** refresh stale root docs that still describe
+    MAHALO3 (`SPEC.md`, `ARCHITECTURE.md`, `DEMO.md`, `PROGRESS.md`) — README.md
+    was already rewritten in Task 9.
 - ⬜ **Task 10** — Sanitize secrets + publish MAHALO-dock to GitHub
 
 ## Open items / reminders

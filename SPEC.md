@@ -1,8 +1,24 @@
-# MAHALO3 — Project Specification
+# MAHALO-dock — Project Specification
+
+> **MAHALO-dock** is the Dockerized evolution of the platform specified below.
+> The product requirements, personas, and agent behavior are unchanged; what
+> changed is **packaging and the GitHub integration**:
+> - The whole stack runs as **one `docker compose up`** (frontend, backend, four
+>   mock services, a real self-hosted **Gitea** git server, and a one-shot
+>   bootstrap). See `README.md`.
+> - The GitHub mock became an **adapter** (`GITHUB_MODE=mock|real`). In `real`
+>   mode it is backed by Gitea, giving **real repos, branches, file-content
+>   commits, and pull requests**; `mock` mode keeps the original offline JSON
+>   store. The HTTP contract on :5003 is identical in both modes.
+> - New agent capabilities: commit files and open pull requests via the chatbot
+>   through the propose→approve→execute flow.
+>
+> The dockerization spec/plan/progress live in **`mahalo-dock-docs/`**. The
+> sections below describe the base platform.
 
 ## Overview
 
-MAHALO3 is an AI-powered, multi-persona SDLC platform that allows Product Managers, Developers, and Executives to interact with a conversational agent. The agent connects live to multiple project management tools (Jira, Confluence, GitHub), retrieves and correlates information across systems, and performs actions on the user's behalf — all through role-specific customizable dashboards with embedded chat.
+MAHALO (originally "MAHALO3") is an AI-powered, multi-persona SDLC platform that allows Product Managers, Developers, and Executives to interact with a conversational agent. The agent connects live to multiple project management tools (Jira, Confluence, GitHub), retrieves and correlates information across systems, and performs actions on the user's behalf — all through role-specific customizable dashboards with embedded chat.
 
 ## Key Technical Decisions
 
@@ -97,9 +113,12 @@ All integrations connect via API tokens. For the PoC, mock services simulate rea
 - Spaces, Pages with search
 - Seed data: ADRs, security guidelines, API specs, retrospectives, requirement docs
 
-### Mock GitHub (:5003)
-- Repos, Branches, PRs, Commits
-- Seed data: Repos matching e-commerce projects with linked PRs and commit history
+### GitHub adapter (:5003)
+- Repos, Branches, PRs, Commits — same HTTP contract in both modes.
+- `GITHUB_MODE=mock` (offline): in-memory JSON store with e-commerce seed repos,
+  linked PRs, and commit history.
+- `GITHUB_MODE=real` (default in Docker): backed by a self-hosted **Gitea**
+  server for real repos, branches, file-content commits, and pull requests.
 
 ## Agent Behavior
 

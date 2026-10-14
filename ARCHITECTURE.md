@@ -1,6 +1,14 @@
-# MAHALO3 — Architecture & System Flow
+# MAHALO-dock — Architecture & System Flow
 
-MAHALO3 is an AI-powered, multi-persona SDLC assistant. A Next.js frontend talks to a FastAPI backend, which runs a LangChain agent that orchestrates OpenAI (for tool-calling) plus a switchable synthesis LLM, calling out to four mock SDLC systems (Jira, Confluence, GitHub, ServiceNow).
+MAHALO-dock is an AI-powered, multi-persona SDLC assistant. A Next.js frontend talks to a FastAPI backend, which runs a LangChain agent that orchestrates OpenAI (for tool-calling) plus a switchable synthesis LLM, calling out to four SDLC systems (Jira, Confluence, GitHub, ServiceNow).
+
+> **Dockerization note:** The entire stack runs via one `docker compose up`. The
+> **GitHub integration is an adapter** on :5003 that keeps the same HTTP contract
+> but dispatches by `GITHUB_MODE`: `mock` (in-memory JSON store, offline) or
+> `real` (backed by a self-hosted **Gitea** git server for real repos, branches,
+> commits, and PRs). A one-shot `gitea-bootstrap` container provisions Gitea
+> (admin user, API token, seeded repo) on first boot. See `README.md` and
+> `mahalo-dock-docs/`.
 
 ## High-Level Architecture
 

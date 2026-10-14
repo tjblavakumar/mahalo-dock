@@ -1,4 +1,10 @@
-# MAHALO3 — Progress Tracker
+# MAHALO-dock — Progress Tracker
+
+> This file tracks the original MAHALO3 platform build (Phases 1–8 below). The
+> **MAHALO-dock dockerization** effort (one-command Docker stack + self-hosted
+> Gitea backend for the GitHub adapter) is tracked separately in
+> **`mahalo-dock-docs/mahalo-dock-progress.md`** — that work is complete and
+> published.
 
 ## Phase Summary
 
@@ -12,6 +18,7 @@
 | Phase 6: Role-Specific Dashboards | Complete | 2026-08-25 | 2026-08-25 |
 | Phase 7: Persona-Specific Agent Behaviors | Complete | 2026-08-25 | 2026-08-25 |
 | Phase 8: Polish, Integration Testing & Documentation | Complete | 2026-08-25 | 2026-08-25 |
+| MAHALO-dock: Dockerization + Gitea backend | Complete | 2026-10-13 | 2026-10-14 |
 
 ---
 
