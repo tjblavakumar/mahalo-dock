@@ -13,11 +13,17 @@ interface TestResult {
   service_info?: Record<string, string>;
 }
 
+// NOTE: The integration URL is called by the BACKEND, not the browser. In the
+// Dockerized stack the backend reaches each service by its Docker service name
+// (e.g. http://mock-confluence:5002), NOT http://localhost — inside the backend
+// container "localhost" is the backend itself. We therefore pre-fill the
+// service-name URL (the canonical Docker path). If you run the services without
+// Docker, change the host to localhost.
 const INTEGRATION_TYPES = [
-  { value: "jira", label: "Jira", icon: "📋", defaultPort: 5001 },
-  { value: "confluence", label: "Confluence", icon: "📄", defaultPort: 5002 },
-  { value: "github", label: "GitHub", icon: "🐙", defaultPort: 5003 },
-  { value: "servicenow", label: "ServiceNow", icon: "🛠️", defaultPort: 5004 },
+  { value: "jira", label: "Jira", icon: "📋", defaultPort: 5001, serviceHost: "mock-jira" },
+  { value: "confluence", label: "Confluence", icon: "📄", defaultPort: 5002, serviceHost: "mock-confluence" },
+  { value: "github", label: "GitHub", icon: "🐙", defaultPort: 5003, serviceHost: "mock-github" },
+  { value: "servicenow", label: "ServiceNow", icon: "🛠️", defaultPort: 5004, serviceHost: "mock-servicenow" },
 ];
 
 const PROJECT_TYPES = [
@@ -181,7 +187,7 @@ export default function ConnectionsPage() {
     const config = INTEGRATION_TYPES.find((t) => t.value === type);
     if (config) {
       setFormName(`My ${config.label}`);
-      setFormUrl(`http://localhost:${config.defaultPort}`);
+      setFormUrl(`http://${config.serviceHost}:${config.defaultPort}`);
       setFormToken(`mock-${type}-token-12345`);
     }
   }
@@ -266,8 +272,13 @@ export default function ConnectionsPage() {
                   value={formUrl}
                   onChange={(e) => setFormUrl(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors text-gray-900"
-                  placeholder="http://localhost:5001"
+                  placeholder="http://mock-jira:5001"
                 />
+                <p className="mt-1 text-xs text-gray-500">
+                  Called by the backend. In Docker use the service name
+                  (e.g. <code>http://mock-jira:5001</code>); without Docker use
+                  <code> http://localhost:5001</code>.
+                </p>
               </div>
 
               <div>
