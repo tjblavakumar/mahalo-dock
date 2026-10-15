@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     # Tool-calling-capable model id (e.g. an Anthropic Claude 3.5+ Bedrock id).
     bedrock_orchestrator_model: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
     bedrock_synthesis_model: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    # Read timeout (seconds) for Bedrock Converse calls. The boto3 default is 60s,
+    # which is too short when the model generates a large response (e.g. a full
+    # source file), causing ReadTimeoutError mid-generation. Code generation can
+    # legitimately take minutes.
+    bedrock_read_timeout: int = 300
+    bedrock_connect_timeout: int = 10
 
     # Mock Services
     mock_jira_url: str = "http://localhost:5001"

@@ -28,13 +28,27 @@ logger = logging.getLogger(__name__)
 
 
 def _build_bedrock(model: str, temperature: float):
-    """Build a Bedrock Converse chat model (lazy import of langchain-aws)."""
+    """Build a Bedrock Converse chat model (lazy import of langchain-aws).
+
+    A longer read timeout is set via a botocore ``Config`` because the default
+    (60s) is too short for large generations (e.g. producing a full source
+    file), which otherwise fail with ``ReadTimeoutError`` mid-response. Adaptive
+    retries smooth over transient throttling.
+    """
+    from botocore.config import Config
     from langchain_aws import ChatBedrockConverse
+
+    boto_config = Config(
+        read_timeout=settings.bedrock_read_timeout,
+        connect_timeout=settings.bedrock_connect_timeout,
+        retries={"max_attempts": 3, "mode": "adaptive"},
+    )
 
     return ChatBedrockConverse(
         model=model,
         region_name=settings.bedrock_region,
         temperature=temperature,
+        config=boto_config,
     )
 
 

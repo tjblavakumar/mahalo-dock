@@ -36,6 +36,10 @@ services:
       - BEDROCK_REGION=${BEDROCK_REGION:-us-east-1}
       - BEDROCK_ORCHESTRATOR_MODEL=${BEDROCK_ORCHESTRATOR_MODEL:-anthropic.claude-3-5-sonnet-20240620-v1:0}
       - BEDROCK_SYNTHESIS_MODEL=${BEDROCK_SYNTHESIS_MODEL:-anthropic.claude-3-5-sonnet-20240620-v1:0}
+      # Bedrock Converse timeouts (seconds). Default read timeout (60s) is too
+      # short for large code-gen responses -> ReadTimeoutError. 300s is safer.
+      - BEDROCK_READ_TIMEOUT=${BEDROCK_READ_TIMEOUT:-300}
+      - BEDROCK_CONNECT_TIMEOUT=${BEDROCK_CONNECT_TIMEOUT:-10}
       - AWS_REGION=${AWS_REGION:-${BEDROCK_REGION:-us-east-1}}
       # AWS_PROFILE is intentionally NOT set here. Passing it empty
       # (AWS_PROFILE=) makes boto3 look up a profile named "" and fail with
