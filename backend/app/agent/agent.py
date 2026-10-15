@@ -125,6 +125,14 @@ async def execute_proposed_action(proposal: dict, integrations: list[Integration
             if response.status_code == 201:
                 data = response.json()
                 return f"✅ Branch created successfully: **{data['name']}**"
+            # Treat an already-existing branch as success: the branch is present,
+            # so the flow can proceed to committing. This keeps the demo resilient
+            # when a branch lingers from a previous attempt.
+            elif response.status_code in (409, 422) or "already exists" in response.text.lower():
+                return (
+                    f"✅ Branch **{params['branch_name']}** already exists — reusing it. "
+                    f"Reply \"commit the code\" to proceed."
+                )
             else:
                 return f"❌ Failed to create branch: {response.text}"
 
