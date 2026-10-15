@@ -134,9 +134,18 @@ stranding the widgets in "Loading..." forever. Widgets also default
   3 personas the same 5 projects (PAY/CART/AUTH/PROD/ORD) with real repo names
   (PAY -> payment-service) and reconciles stale github_repo_name values.
 
+**Also fixed (2026-10-15, author mapping):**
+- Single-user demo: all real git activity is by the one Gitea admin user, but
+  the app filters by dev id (dev-6). The github adapter (`gitea_backend.py`) now
+  maps the Gitea owner login -> `DEMO_DEVELOPER_ID` (dev-6) in commit/PR/stats
+  mapping, so Recent Commits (and any PR the chatbot opens) show up for the
+  logged-in demo user. Verified: dev-6-filtered commits return the 4 seed commits.
+
 **Still TODO (needs Path 2 per-project repos):**
 - Only `payment-service` exists in Gitea, so only PAY resolves to a real repo.
   Seed the other 4 repos so CART/AUTH/PROD/ORD dashboards/commits work too.
+- "My PRs" is empty until a PR exists; create one via the chatbot PAY flow (it
+  will now be attributed to dev-6), or seed a demo PR with Path 2.
 
 ## 5. Candidate follow-ups (unscheduled)
 
