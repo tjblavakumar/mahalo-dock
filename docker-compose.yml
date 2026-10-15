@@ -125,6 +125,9 @@ services:
       - GITEA_ADMIN_USER=${GITEA_ADMIN_USER:-mahalo_admin}
       - GITEA_PUBLIC_URL=${GITEA_PUBLIC_URL:-http://localhost:3001}
       - GITEA_TOKEN_FILE=/bootstrap/gitea_token
+      # Single-user demo: report the Gitea owner's git activity as this demo
+      # developer id so the app's dev-id filters (dashboard, agent) match.
+      - DEMO_DEVELOPER_ID=${DEMO_DEVELOPER_ID:-dev-6}
     volumes:
       # Read-only access to the bootstrap token written by gitea-bootstrap.
       - gitea-bootstrap:/bootstrap:ro

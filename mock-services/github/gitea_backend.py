@@ -52,6 +52,13 @@ class GiteaBackend(GithubBackend):
         self.token = token or os.environ.get("GITEA_TOKEN", "") or self._read_token_file()
         self.owner = owner or os.environ.get("GITEA_ADMIN_USER", "mahalo_admin")
         self.api = f"{self.base_url}/api/v1"
+        # Single-user demo: all real git activity is performed by the one Gitea
+        # user (the admin/owner). The app, however, filters PRs/commits by a
+        # developer id (e.g. dev-6) that represents the logged-in demo user.
+        # Map the Gitea owner's login -> that demo developer id so the dashboard
+        # ("My PRs"/"Recent Commits" filtered by author=dev-6) and the agent see
+        # the activity as the demo developer's. Configurable via env.
+        self.demo_developer_id = os.environ.get("DEMO_DEVELOPER_ID", "dev-6")
         # Gitea derives html_url from the request Host, so links returned to the
         # adapter come back as the in-stack base (http://gitea:3000/...), which a
         # browser can't reach. Rewrite them to the browser-facing public URL.
@@ -64,6 +71,17 @@ class GiteaBackend(GithubBackend):
         if not url:
             return url
         return url.replace(self.base_url, self.public_url)
+
+    def _map_author_id(self, login: Optional[str]) -> str:
+        """Map a Gitea login to the reported author_id.
+
+        For the single-user demo, the owner/admin login is reported as the demo
+        developer id so the app's dev-id-based filters match. Any other login is
+        passed through unchanged.
+        """
+        if login and login == self.owner:
+            return self.demo_developer_id
+        return login or self.demo_developer_id
 
     @staticmethod
     def _read_token_file() -> str:
@@ -178,7 +196,7 @@ class GiteaBackend(GithubBackend):
             "title": g.get("title") or "",
             "description": g.get("body") or "",
             "author": user.get("full_name") or user.get("login") or "",
-            "author_id": user.get("login") or "",
+            "author_id": self._map_author_id(user.get("login")),
             "status": status,
             "branch": head.get("ref") or "",
             "target_branch": base.get("ref") or "main",
@@ -202,7 +220,9 @@ class GiteaBackend(GithubBackend):
             "repo_id": repo_id,
             "branch": "",  # Gitea's commit list isn't branch-tagged; filled by caller when known
             "author": c_author.get("name") or gitea_author.get("login") or "",
-            "author_id": gitea_author.get("login") or c_author.get("name") or "",
+            "author_id": self._map_author_id(
+                gitea_author.get("login") or c_author.get("name")
+            ),
             "message": (commit.get("message") or "").strip(),
             "date": _date_only(c_author.get("date")),
             "additions": stats.get("additions", 0),
@@ -447,7 +467,7 @@ class GiteaBackend(GithubBackend):
             "repo_id": repo_id,
             "branch": branch,
             "author": author.get("name") or self.owner,
-            "author_id": self.owner,
+            "author_id": self._map_author_id(self.owner),
             "message": message,
             "date": _date_only(author.get("date")),
             "additions": total_add,
@@ -526,8 +546,9 @@ class GiteaBackend(GithubBackend):
             commit = c.get("commit") or {}
             c_author = commit.get("author") or {}
             g_author = c.get("author") or {}
-            login = g_author.get("login") or c_author.get("name") or "unknown"
-            name = c_author.get("name") or login
+            raw_login = g_author.get("login") or c_author.get("name") or "unknown"
+            login = self._map_author_id(raw_login)
+            name = c_author.get("name") or raw_login
             stats = c.get("stats") or {}
             a = agg.setdefault(
                 login,
