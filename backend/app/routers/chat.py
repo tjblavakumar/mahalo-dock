@@ -186,9 +186,45 @@ async def approve_action(
         .all()
     )
 
+    executed = session.pending_action
     try:
-        result_message = await execute_proposed_action(session.pending_action, integrations)
+        result_message = await execute_proposed_action(executed, integrations)
         session.pending_action = None
+
+        # Record the executed action in the conversation history so the NEXT
+        # agent turn knows this step succeeded and can advance a multi-step flow
+        # (e.g. after a branch is approved, propose the commit instead of
+        # re-proposing the branch). Without this, approval does not feed back to
+        # the agent and the branch->commit->PR chain loops on step 1.
+        from app.agent.session import ChatMessage
+
+        action = executed.get("action")
+        p = executed.get("params", {})
+        if action == "create_branch":
+            note = (
+                f"[SYSTEM] The user APPROVED and the branch '{p.get('branch_name')}' "
+                f"now exists in repo '{p.get('repo_id')}'. Do NOT propose creating it "
+                f"again. Next, if the user asked to commit code, propose "
+                f"github_commit_files to that branch with the full file contents you "
+                f"prepared earlier."
+            )
+        elif action == "commit_files":
+            note = (
+                f"[SYSTEM] The user APPROVED and the files were committed to branch "
+                f"'{p.get('branch')}' in repo '{p.get('repo_id')}'. Do NOT propose "
+                f"committing again. Next, if the user wants a PR, propose "
+                f"github_open_pull_request from '{p.get('branch')}' into main."
+            )
+        elif action == "open_pull_request":
+            note = (
+                f"[SYSTEM] The user APPROVED and a pull request was opened from "
+                f"'{p.get('head')}' into '{p.get('base', 'main')}' in repo "
+                f"'{p.get('repo_id')}'. The check-in flow is complete."
+            )
+        else:
+            note = f"[SYSTEM] The user approved and the '{action}' action was executed."
+
+        session.messages.append(ChatMessage(role="assistant", content=note))
         return ActionResult(success=True, message=result_message)
     except Exception as e:
         session.pending_action = None
