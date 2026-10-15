@@ -75,7 +75,32 @@ what exists.
 
 ---
 
-## 3. Candidate follow-ups (unscheduled)
+## 3. Multi-step git flow doesn't auto-continue after approval
+
+**Status:** deferred (2026-10-15); demo workaround in place
+**Priority:** medium
+
+**Problem.** The branch -> commit -> PR check-in flow is a chain of separate
+approvals, but approving one step does not re-invoke the agent to propose the
+next. `approve_action` in `backend/app/routers/chat.py` executes the pending
+action, clears `pending_action`, and returns — it never feeds the result back
+into the agent. So after the user approves the branch, nothing proposes the
+commit; the chain dead-ends. Observed: PAY-109 branch created (201), but no
+commit/PR followed.
+
+**Workaround (shipped):** prompt now instructs the agent to end each step by
+telling the user exactly what to type to continue (e.g. "Reply 'commit the code'").
+So the demo flow is: approve branch -> type "commit the code" -> approve ->
+type "open a PR" -> approve.
+
+**Proper fix (TODO):** after `approve_action` executes a step, optionally
+re-invoke the agent with a synthetic "the <action> was approved and succeeded;
+continue the plan" turn so it proposes the next step automatically (branch ->
+commit -> PR) with a single user approval per step but no manual re-prompting.
+Needs care so it doesn't loop or auto-execute without approval. Touches
+`backend/app/routers/chat.py` and `backend/app/agent/agent.py`.
+
+## 4. Candidate follow-ups (unscheduled)
 
 - `deploy-aws.ps1 -DryRun` to preview actions without creating resources.
 - A `BEDROCK_READ_TIMEOUT` already exists; consider surfacing a frontend-side
