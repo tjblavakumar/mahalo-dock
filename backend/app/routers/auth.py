@@ -18,6 +18,19 @@ from app.services.auth_service import (
     hash_password,
     verify_password,
 )
+from app.services.identity import developer_id_for_email
+
+
+def _user_response(user: User) -> UserResponse:
+    """Build a UserResponse including the resolved mock-system developer id."""
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        role=user.role,
+        created_at=user.created_at,
+        developer_id=developer_id_for_email(user.email),
+    )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer()
@@ -76,7 +89,7 @@ def register(request: UserRegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    return user
+    return _user_response(user)
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -97,4 +110,4 @@ def login(request: UserLoginRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 def get_me(current_user: User = Depends(get_current_user)):
     """Return the currently authenticated user's information."""
-    return current_user
+    return _user_response(current_user)

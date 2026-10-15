@@ -10,6 +10,9 @@ export interface User {
   name: string;
   role: UserRole;
   created_at: string;
+  // Mock-system identity (e.g. "dev-6") this login maps to, from /auth/me.
+  // Used by dashboard widgets to show the logged-in user's own PRs/commits.
+  developer_id?: string | null;
 }
 
 export interface HealthStatus {

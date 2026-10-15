@@ -28,7 +28,11 @@ interface RoleDashboard {
   layout: Layout[];
 }
 
-function buildRoleDashboard(role: string | undefined, selectedProjects: Project[]): RoleDashboard {
+function buildRoleDashboard(
+  role: string | undefined,
+  selectedProjects: Project[],
+  developerId: string
+): RoleDashboard {
   if (role === "product_manager") {
     return {
       widgets: [
@@ -68,9 +72,9 @@ function buildRoleDashboard(role: string | undefined, selectedProjects: Project[
   if (role === "developer") {
     return {
       widgets: [
-        { id: "my-stories", title: "My Stories", content: <MyStoriesWidget developerId="dev-1" /> },
-        { id: "my-prs", title: "My Pull Requests", content: <MyPRsWidget developerId="dev-1" /> },
-        { id: "recent-commits", title: "Recent Commits", content: <RecentCommitsWidget developerId="dev-1" /> },
+        { id: "my-stories", title: "My Stories", content: <MyStoriesWidget developerId={developerId} /> },
+        { id: "my-prs", title: "My Pull Requests", content: <MyPRsWidget developerId={developerId} /> },
+        { id: "recent-commits", title: "Recent Commits", content: <RecentCommitsWidget developerId={developerId} /> },
         { id: "sprint-board", title: "Sprint Board", content: <SprintBoardWidget selectedProjects={selectedProjects} /> },
         { id: "velocity", title: "Sprint Velocity", content: <VelocityWidget selectedProjects={selectedProjects} /> },
       ],
@@ -92,9 +96,13 @@ export default function DashboardPage() {
   const { selectedProjects, loading: projectsLoading } = useProjects();
   const { isConfigured, loading: connectionsLoading } = useRequiredConnections();
 
+  // Resolve the logged-in user's mock-system developer id (from /auth/me),
+  // so widgets show THIS user's stories/PRs/commits instead of a hardcoded dev-1.
+  const developerId = user?.developer_id || "dev-6";
+
   const { widgets, layout } = useMemo(
-    () => buildRoleDashboard(user?.role, selectedProjects),
-    [user?.role, selectedProjects]
+    () => buildRoleDashboard(user?.role, selectedProjects, developerId),
+    [user?.role, selectedProjects, developerId]
   );
 
   // Data is still settling until both connections and projects have loaded.

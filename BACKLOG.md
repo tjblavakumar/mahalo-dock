@@ -120,14 +120,23 @@ stranding the widgets in "Loading..." forever. Widgets also default
 - Manual demo patch: pointed lava@dev.com's PAY project at `payment-service`
   and marked it active (DB edit; NOT persisted in seed data).
 
-**TODO (proper fix, with Path 2):**
-- Seed project `github_repo_name` values that match the real seeded repos (needs
-  the per-project repos from item #2). Reconcile project seed names
-  (`payment-gateway`) with repo names (`payment-service`) — pick one convention.
-- Pass the logged-in user's developer id to the widgets instead of hardcoded
-  `dev-1`.
-- Touches: project seed/bootstrap, `frontend/src/app/(protected)/dashboard/page.tsx`,
-  the dashboard widgets.
+**Also fixed (2026-10-15, identity wiring):**
+- Added `backend/app/services/identity.py` mapping the demo logins
+  (lava@dev.com / lava@exe.com / lava@pm.com) -> Jira developer id `dev-6`
+  ("Lava Dev"), the single demo identity. Exposed as `developer_id` on
+  `/auth/me` + `/auth/register`; frontend `User` type carries it.
+- Dashboard widgets now receive the logged-in user's `developer_id` (default
+  dev-6) instead of hardcoded `dev-1`, so they show the user's own stories/PRs/
+  commits. (`frontend/src/app/(protected)/dashboard/page.tsx`.)
+- Agent system prompt now states the current user's developer id so "me"/"my"/
+  "assigned to me" resolve deterministically (no fragile name match).
+- Added `backend/app/services/project_seed.py` (startup, idempotent): gives all
+  3 personas the same 5 projects (PAY/CART/AUTH/PROD/ORD) with real repo names
+  (PAY -> payment-service) and reconciles stale github_repo_name values.
+
+**Still TODO (needs Path 2 per-project repos):**
+- Only `payment-service` exists in Gitea, so only PAY resolves to a real repo.
+  Seed the other 4 repos so CART/AUTH/PROD/ORD dashboards/commits work too.
 
 ## 5. Candidate follow-ups (unscheduled)
 

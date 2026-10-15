@@ -38,6 +38,9 @@ class UserResponse(BaseModel):
     name: str
     role: UserRole
     created_at: datetime
+    # Mock-system identity (dev-1..dev-6) this login maps to, so the dashboard
+    # and agent key off the same id. Resolved from the email (see services.identity).
+    developer_id: str | None = None
 
     class Config:
         from_attributes = True

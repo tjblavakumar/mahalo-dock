@@ -34,8 +34,11 @@ export default function MyStoriesWidget({ developerId = "dev-1" }: { developerId
       const result = await api.get<{ stories: Story[] }>(
         `/proxy/jira/projects/${proj}/stories?assignee=${developerId}`
       );
-      if (result.data) {
-        allStories.push(...result.data.stories.filter((s) => s.status !== "done"));
+      // Guard against error bodies lacking a `stories` array so the widget
+      // never throws and strands in "Loading...".
+      const list = result.data?.stories;
+      if (Array.isArray(list)) {
+        allStories.push(...list.filter((s) => s.status !== "done"));
       }
     }
     setStories(allStories);

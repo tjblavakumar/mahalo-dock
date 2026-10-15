@@ -54,11 +54,15 @@ def create_app() -> FastAPI:
         # Seed default persona login accounts (idempotent) so a fresh deploy
         # always has the demo users ready: lava@dev.com / lava@pm.com / lava@exe.com.
         from app.core.database import SessionLocal
+        from app.services.project_seed import seed_persona_projects
         from app.services.user_seed import seed_default_users
 
         _db = SessionLocal()
         try:
             seed_default_users(_db)
+            # Must run after users exist: gives each persona the standard 5
+            # demo projects with real repo names so dashboards are consistent.
+            seed_persona_projects(_db)
         finally:
             _db.close()
 

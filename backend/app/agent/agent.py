@@ -261,6 +261,20 @@ async def chat(
     )
     system_prompt += f"\n\nProject context:\n{project_context}\n"
 
+    # Tell the agent exactly which mock-system developer id represents the
+    # current user, so "me"/"my"/"assigned to me" resolve deterministically
+    # instead of relying on a fragile name match against jira_list_developers.
+    from app.services.identity import developer_id_for_email
+
+    _dev_id = developer_id_for_email(user.email)
+    system_prompt += (
+        f"\nCURRENT USER IDENTITY: in Jira/GitHub/ServiceNow, the logged-in user "
+        f"('{user.name}', {user.email}) is developer id '{_dev_id}'. Whenever the "
+        f"user says 'me', 'my', 'mine', or 'assigned to me', use '{_dev_id}' as the "
+        f"developer/assignee/author id directly — do NOT try to match their display "
+        f"name against the developer list.\n"
+    )
+
     # Initialize the orchestrator LLM via the provider factory. It needs native
     # tool calling to decide which tools to invoke from the user's intent
     # (OpenAI-compatible or Bedrock Converse, per LLM_PROVIDER).
