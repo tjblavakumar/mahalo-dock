@@ -66,8 +66,11 @@ def create_github_tools(github_url: str, github_token: str):
 
     @tool
     def github_get_pull_requests(repo_id: str, status: Optional[str] = None, author_id: Optional[str] = None) -> str:
-        """Get pull requests for a repository. repo_id: repo-1 (payment-service), repo-2 (cart-service), repo-3 (auth-service), repo-4 (product-service), repo-5 (order-service).
-        Optional filters: status (open/draft/merged/closed), author_id (dev-1 through dev-5)."""
+        """Get pull requests for a repository. repo_id MUST be a real repository
+        NAME as returned by github_list_repos (e.g. "payment-service"). Do NOT
+        invent ids like "repo-1"/"repo-4" — call github_list_repos first and use
+        a name from that list.
+        Optional filters: status (open/draft/merged/closed), author_id (dev-1 through dev-6)."""
         params = {}
         if status:
             params["status"] = status
@@ -96,7 +99,8 @@ def create_github_tools(github_url: str, github_token: str):
     @tool
     def github_get_commits(repo_id: str, branch: Optional[str] = None, author: Optional[str] = None) -> str:
         """Get recent commits for a repository. Can filter by branch name or author (name or dev-ID).
-        repo_id: repo-1 (payment-service), repo-2 (cart-service), repo-3 (auth-service), repo-4 (product-service), repo-5 (order-service)."""
+        repo_id MUST be a real repository NAME from github_list_repos (e.g.
+        "payment-service"). Do NOT invent ids like "repo-1"."""
         params = {}
         if branch:
             params["branch"] = branch
@@ -118,7 +122,8 @@ def create_github_tools(github_url: str, github_token: str):
     @tool
     def github_get_repo_stats(repo_id: str) -> str:
         """Get repository statistics including contributor activity, total commits, and branch info.
-        repo_id: repo-1 (payment-service), repo-2 (cart-service), repo-3 (auth-service), repo-4 (product-service), repo-5 (order-service)."""
+        repo_id MUST be a real repository NAME from github_list_repos (e.g.
+        "payment-service"). Do NOT invent ids like "repo-1"."""
         data = _make_github_request(github_url, github_token, endpoint=f"/repos/{repo_id}/stats")
         if "error" in data:
             return f"Error: {data['error']}"
@@ -137,7 +142,9 @@ def create_github_tools(github_url: str, github_token: str):
     @tool
     def github_create_branch(repo_id: str, branch_name: str, from_branch: str = "main") -> str:
         """[WRITE ACTION - REQUIRES APPROVAL] Create a new branch in a repository.
-        repo_id: repo-1 (payment-service), repo-2 (cart-service), etc.
+        repo_id MUST be a real repository NAME as returned by github_list_repos
+        (e.g. "payment-service"). Call github_list_repos first and use a name
+        from that list — do NOT invent ids like "repo-1"/"repo-4".
         branch_name: Name for the new branch (e.g., feature/PAY-109-crypto-payments)."""
         proposal = {
             "action": "create_branch",
@@ -163,8 +170,8 @@ def create_github_tools(github_url: str, github_token: str):
         Use this to check in code you have generated. The branch must already
         exist (create it first with github_create_branch if needed).
 
-        repo_id: repo-1 (payment-service), repo-2 (cart-service), repo-3 (auth-service),
-                 repo-4 (product-service), repo-5 (order-service), or a repo name.
+        repo_id MUST be a real repository NAME from github_list_repos (e.g.
+        "payment-service"). Do NOT invent ids like "repo-1"/"repo-4".
         branch: the existing branch to commit onto (e.g. feature/PAY-109-crypto-payments).
         message: the commit message.
         files: a list of {"path": "<repo-relative path>", "content": "<full file text>"}.
@@ -200,7 +207,8 @@ def create_github_tools(github_url: str, github_token: str):
     ) -> str:
         """[WRITE ACTION - REQUIRES APPROVAL] Open a pull request from head into base.
 
-        repo_id: repo-1 (payment-service), repo-2 (cart-service), etc., or a repo name.
+        repo_id MUST be a real repository NAME from github_list_repos (e.g.
+        "payment-service"). Do NOT invent ids like "repo-1"/"repo-4".
         head: the source branch containing your changes (e.g. feature/PAY-109-crypto-payments).
         base: the branch to merge into (default: main).
         title: PR title. body: PR description."""

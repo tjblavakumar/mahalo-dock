@@ -302,3 +302,32 @@
 | 2026-08-25 | Session-only memory | Simplifies PoC scope |
 | 2026-08-25 | Propose & Confirm for all write actions | Trust and safety |
 | 2026-08-25 | Rich e-commerce seed data | Realistic demo experience |
+
+---
+
+## Backlog / Future Work
+
+Deferred enhancements, captured but not yet scheduled.
+
+### Bulk write operations in the agent (deferred 2026-10-15)
+**Problem:** The propose/approve pipeline is single-action. A bulk request such
+as "assign all of David Kim's stories to me" or "move all todo stories to
+in_progress" makes the agent *describe* N changes, but only the **first** write
+executes — `_extract_proposal` breaks on the first `__PROPOSAL__` block,
+`session.pending_action` holds one dict, and `execute_proposed_action` runs one
+action. Observed: approving a 7-story reassignment updated only PAY-104.
+
+**Proposed fix (Option A — batch proposal):**
+- Carry a list of actions through the pipeline (e.g. proposal `{"actions": [...]}`,
+  or a dedicated `jira_bulk_update_stories` tool).
+- `_extract_proposal` collects all actions instead of break-on-first;
+  `session.pending_action` holds a list.
+- `execute_proposed_action` loops, executing each and returning a per-item
+  success/fail summary; continue-on-failure and report which succeeded/failed.
+- Scope: start Jira-only (reassignments / status changes); generalize to
+  Git/ServiceNow later. Add a test for partial-failure reporting.
+- Touches: `backend/app/agent/agent.py`, `backend/app/agent/tools/jira_tools.py`,
+  `backend/app/routers/chat.py`.
+
+**Workaround for now:** do one story per approval. The single-action path is
+reliable.

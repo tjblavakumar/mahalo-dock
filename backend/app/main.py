@@ -51,6 +51,17 @@ def create_app() -> FastAPI:
         init_db()
         logger.info("Database initialized.")
 
+        # Seed default persona login accounts (idempotent) so a fresh deploy
+        # always has the demo users ready: lava@dev.com / lava@pm.com / lava@exe.com.
+        from app.core.database import SessionLocal
+        from app.services.user_seed import seed_default_users
+
+        _db = SessionLocal()
+        try:
+            seed_default_users(_db)
+        finally:
+            _db.close()
+
         # Validate LLM configuration (fails fast if the orchestrator can't run,
         # normalizes the switchable synthesis provider otherwise).
         settings.validate_llm_config()
