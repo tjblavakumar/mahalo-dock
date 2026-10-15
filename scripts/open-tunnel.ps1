@@ -85,16 +85,40 @@ if (-not (Test-NetConnection -ComputerName $PublicIp -Port 22 -WarningAction Sil
 }
 
 Write-Host ""
-Ok "Opening tunnel. Browse while this stays open:"
+Write-Host "============================================================" -ForegroundColor Green
+Ok "TUNNEL IS NOW OPENING. This window will go SILENT and look frozen."
+Write-Host "    That silence is normal - it means the tunnel is working." -ForegroundColor Yellow
+Write-Host "    >> Leave THIS window open and untouched. <<" -ForegroundColor Yellow
+Write-Host "    >> Switch to your BROWSER to use the app.  <<" -ForegroundColor Yellow
+Write-Host "    Press Ctrl+C here ONLY when you want to close the tunnel."
+Write-Host "============================================================" -ForegroundColor Green
+Write-Host ""
+Write-Host " Browse (while this window stays open):"
 Write-Host "   App     : http://localhost:3000"
 Write-Host "   Gitea   : http://localhost:3001  (mahalo_admin / MahaloDock123!)"
 Write-Host "   Backend : http://localhost:8008/health"
-Write-Host "   (Ctrl+C to close the tunnel)"
 Write-Host ""
 
-# foreground tunnel; -N = no remote shell, just forwarding
-ssh -i $PemPath -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -N `
+# Foreground tunnel; -N = no remote shell, just port forwarding. Keepalives are
+# tuned so a brief network blip does not silently drop the tunnel:
+#   ServerAliveInterval=30  -> ping the server every 30s
+#   ServerAliveCountMax=3    -> only give up after 3 missed pings (~90s)
+#   ExitOnForwardFailure=yes -> fail loudly if a local port is already taken
+# NOTE: this command intentionally does NOT return until the tunnel closes.
+ssh -i $PemPath `
+    -o StrictHostKeyChecking=accept-new `
+    -o ServerAliveInterval=30 `
+    -o ServerAliveCountMax=3 `
+    -o ExitOnForwardFailure=yes `
+    -N `
     -L 3000:localhost:3000 `
     -L 3001:localhost:3001 `
     -L 8008:localhost:8008 `
     ubuntu@$PublicIp
+
+# If ssh returns, the tunnel closed (Ctrl+C, dropped connection, or a port was
+# already in use). The ports stop forwarding and the browser will show
+# ERR_CONNECTION_REFUSED until you re-run this script.
+Write-Host ""
+Warn "Tunnel closed. localhost:3000/3001/8008 will no longer connect."
+Warn "Re-run this script to reopen it."
