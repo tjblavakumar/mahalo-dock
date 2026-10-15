@@ -100,7 +100,36 @@ commit -> PR) with a single user approval per step but no manual re-prompting.
 Needs care so it doesn't loop or auto-execute without approval. Touches
 `backend/app/routers/chat.py` and `backend/app/agent/agent.py`.
 
-## 4. Candidate follow-ups (unscheduled)
+## 4. Dashboard widgets reference fake repo ids / wrong developer
+
+**Status:** partially fixed (2026-10-15)
+**Priority:** medium
+
+**Problem.** Dashboard widgets query repos that don't exist in Gitea:
+`RecentCommitsWidget` was hardcoded to `repo-1..repo-5`; projects seed
+`github_repo_name` as `payment-gateway`/`shopping-cart`/etc. (none match the one
+real repo `payment-service`). Every call 404'd and the undefined array threw,
+stranding the widgets in "Loading..." forever. Widgets also default
+`developerId="dev-1"` instead of the logged-in user.
+
+**Fixed (shipped):**
+- `RecentCommitsWidget` now uses real project repo names (like MyPRsWidget).
+- Both widgets guard with `Array.isArray` so a 404/error body can't throw.
+- Proxy (`backend/app/routers/proxy.py`) now propagates upstream >=400 instead of
+  returning the error body as 200.
+- Manual demo patch: pointed lava@dev.com's PAY project at `payment-service`
+  and marked it active (DB edit; NOT persisted in seed data).
+
+**TODO (proper fix, with Path 2):**
+- Seed project `github_repo_name` values that match the real seeded repos (needs
+  the per-project repos from item #2). Reconcile project seed names
+  (`payment-gateway`) with repo names (`payment-service`) — pick one convention.
+- Pass the logged-in user's developer id to the widgets instead of hardcoded
+  `dev-1`.
+- Touches: project seed/bootstrap, `frontend/src/app/(protected)/dashboard/page.tsx`,
+  the dashboard widgets.
+
+## 5. Candidate follow-ups (unscheduled)
 
 - `deploy-aws.ps1 -DryRun` to preview actions without creating resources.
 - A `BEDROCK_READ_TIMEOUT` already exists; consider surfacing a frontend-side
