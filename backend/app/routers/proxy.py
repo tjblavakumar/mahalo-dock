@@ -87,6 +87,11 @@ async def proxy_github(
             headers={"X-API-Token": integration.token},
             params=query_params,
         )
+    # Propagate upstream errors instead of returning a 404/err body as a 200,
+    # which made frontend widgets receive a payload lacking the expected arrays
+    # (e.g. no `commits`/`pull_requests`) and throw, stranding them in "Loading...".
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=response.text)
     return response.json()
 
 

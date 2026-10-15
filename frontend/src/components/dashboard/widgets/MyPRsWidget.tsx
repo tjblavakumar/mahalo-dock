@@ -36,8 +36,11 @@ export default function MyPRsWidget({ developerId = "dev-1" }: { developerId?: s
       const result = await api.get<{ pull_requests: PullRequest[] }>(
         `/proxy/github/repos/${repo}/pulls?author_id=${developerId}`
       );
-      if (result.data) {
-        allPRs.push(...result.data.pull_requests);
+      // Guard against error/404 bodies that lack a `pull_requests` array, so a
+      // bad repo can never throw and strand the widget in "Loading..." forever.
+      const list = result.data?.pull_requests;
+      if (Array.isArray(list)) {
+        allPRs.push(...list);
       }
     }
     setPRs(allPRs);

@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useProjects } from "@/contexts/ProjectContext";
 import { api } from "@/services/api";
 
 interface Commit {
@@ -14,25 +15,39 @@ interface Commit {
 }
 
 export default function RecentCommitsWidget({ developerId = "dev-1" }: { developerId?: string }) {
+  const { projects: userProjects, activeProject } = useProjects();
   const [commits, setCommits] = useState<Commit[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Use the REAL repo names mapped to the user's projects (e.g. payment-service),
+  // not hardcoded ids like repo-1..repo-5 which do not exist in the Gitea backend.
+  const repoIds = useMemo(() => {
+    const list = userProjects
+      .map((project) => project.github_repo_name)
+      .filter((value): value is string => Boolean(value));
+    if (list.length > 0) return Array.from(new Set(list));
+    if (activeProject?.github_repo_name) return [activeProject.github_repo_name];
+    return [];
+  }, [userProjects, activeProject]);
+
   const loadData = useCallback(async () => {
     setLoading(true);
-    const repos = ["repo-1", "repo-2", "repo-3", "repo-4", "repo-5"];
     const allCommits: Commit[] = [];
-    for (const repo of repos) {
+    for (const repo of repoIds) {
       const result = await api.get<{ commits: Commit[] }>(
         `/proxy/github/repos/${repo}/commits?author=${developerId}`
       );
-      if (result.data) {
-        allCommits.push(...result.data.commits.map((c) => ({ ...c, repo_id: repo })));
+      // Guard against error/404 bodies that lack a `commits` array, so a bad
+      // repo can never throw and strand the widget in "Loading..." forever.
+      const list = result.data?.commits;
+      if (Array.isArray(list)) {
+        allCommits.push(...list.map((c) => ({ ...c, repo_id: repo })));
       }
     }
     allCommits.sort((a, b) => b.date.localeCompare(a.date));
     setCommits(allCommits.slice(0, 10));
     setLoading(false);
-  }, [developerId]);
+  }, [developerId, repoIds]);
 
   useEffect(() => {
     // Defer to a microtask so the synchronous setLoading(true) at the top of
