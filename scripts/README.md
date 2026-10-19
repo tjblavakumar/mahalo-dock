@@ -4,6 +4,49 @@ One-shot provisioning for the MAHALO-dock demo on EC2 + Bedrock, driven from the
 Windows AWS WorkSpace. Built to be re-run after the monthly account reset. See
 `../aws-deploy-plan.md` for the full design and rationale.
 
+## TL;DR runbook — what to do, and when
+
+Three situations. Pick the one you're in. Run everything from the repo root on
+the WorkSpace, in PowerShell.
+
+### A. Every day you want to demo (instance already exists this month)
+This is the normal case. The instance is just stopped between demos.
+```powershell
+aws sso login --profile lava        # authenticate (skip if your session is still valid)
+pwsh ./scripts/open-tunnel.ps1      # starts the instance if stopped, then tunnels
+```
+Then, in your **browser**, open http://localhost:3000 and log in with
+`lava@dev.com` / `MahaloDock123!` (see **Login credentials**). Leave the tunnel
+window open (it goes silent — that's normal). Press **Ctrl+C** in it when done.
+
+To pause and save money after the demo:
+```powershell
+# Ctrl+C in the tunnel window first, then:
+pwsh ./scripts/teardown-aws.ps1 -StopOnly
+```
+
+### B. First demo of the month (right after the monthly purge wiped everything)
+Nothing exists yet, so you must build it once. This takes several minutes.
+```powershell
+aws sso login --profile lava        # 1. authenticate
+pwsh ./scripts/deploy-aws.ps1       # 2. build infra + deploy app (several min)
+pwsh ./scripts/open-tunnel.ps1      # 3. SEPARATE terminal; opens your window into the app
+```
+Then browse http://localhost:3000 and log in as above. After this, every later
+demo this month is just situation **A**.
+
+### C. You're done for the month (or want a clean slate early)
+```powershell
+pwsh ./scripts/teardown-aws.ps1     # deletes everything (prompts; add -Force to skip)
+```
+
+> Quick decision: **Does a `mahalo-dock` instance already exist this month?**
+> Yes → situation **A** (just `open-tunnel`). No → situation **B** (`deploy`
+> first). The monthly purge always puts you back in **B**.
+
+If anything misbehaves (blank page, login fails, chatbot error), jump to
+**Troubleshooting** at the bottom.
+
 ## What each script does (read this first)
 
 The three scripts do different jobs. The one that confuses people is the tunnel,
@@ -167,8 +210,8 @@ ssh -i "$env:USERPROFILE\.ssh\mahalo-dock-key.pem" -N `
   -L 3000:localhost:3000 -L 3001:localhost:3001 -L 8008:localhost:8008 `
   ubuntu@<public-ip>
 ```
-Then browse: App http://localhost:3000 · Gitea http://localhost:3001
-(mahalo_admin / MahaloDock123!) · Backend http://localhost:8008/health
+Then browse: App http://localhost:3000 · Gitea http://localhost:3001 · Backend
+http://localhost:8008/health. See **Login credentials** below for the accounts.
 
 ## Stop / tear down
 ```powershell
@@ -194,6 +237,36 @@ pwsh ./scripts/teardown-aws.ps1             # full teardown (prompts; -Force to 
   instance-role `docker compose ... up -d` from `/home/ubuntu/mahalo-dock` on
   every boot. A stop/start therefore brings the stack back automatically.
 
+## Login credentials
+
+Two different logins — don't mix them up:
+
+| Where | Username/field | Password | Notes |
+|---|---|---|---|
+| **App** (http://localhost:3000) | an **email** (not a username) | `MahaloDock123!` | `lava@dev.com` (Developer), `lava@pm.com` (Product Manager), `lava@exe.com` (Executive) |
+| **Gitea** (http://localhost:3001) | `mahalo_admin` | `MahaloDock123!` | admin account for the git server |
+
+The most common app-login mistake is typing `mahalo_admin` (that's **Gitea**) or
+just `lava` into the app's login box. The app wants the full **email**, e.g.
+`lava@dev.com`.
+
+These three app accounts are **seeded automatically on first backend startup**
+and are **not reset** on container restart or instance stop/start — they live in
+the `backend-data` Docker volume. A full teardown or the monthly purge wipes the
+volume, after which the next `deploy-aws.ps1` re-seeds the same three accounts
+with the same password.
+
+If an app login ever rejects `MahaloDock123!` (e.g. an old volume whose stored
+hash drifted from the current default), reset the three demo passwords to the
+documented value without disturbing anything else:
+```powershell
+# one-off: re-hash the three persona passwords to DEFAULT_PASSWORD
+docker exec -w /app mahalo-dock-backend-1 python -c "from app.core.database import SessionLocal; from app.models.user import User; from app.services.auth_service import hash_password; from app.services.user_seed import DEFAULT_PASSWORD, DEFAULT_USERS; db=SessionLocal(); [setattr(u,'password_hash',hash_password(DEFAULT_PASSWORD)) for e in DEFAULT_USERS if (u:=db.query(User).filter(User.email==e['email']).first())]; db.commit(); db.close(); print('reset done')"
+```
+(Run it on the instance, e.g. via SSM or an SSH session. On EC2 the containers
+run as the instance user; prefix with `sudo` if your shell isn't in the docker
+group.)
+
 ## Troubleshooting
 - **Browser: "Unable to connect" at `localhost:3000`.** First confirm the
   `open-tunnel.ps1` window is still open (it looks frozen — that is normal and
@@ -206,6 +279,15 @@ pwsh ./scripts/teardown-aws.ps1             # full teardown (prompts; -Force to 
   Network Settings, set 'No proxy' for localhost (or add `localhost,127.0.0.1`
   to 'No proxy for'). If `curl.exe` also fails, re-open the tunnel (and if TCP 22
   is unreachable, your egress IP likely changed — re-run `deploy-aws.ps1`).
+- **App login fails ("Invalid email or password").** First check you're on the
+  **app** (http://localhost:3000), using an **email** like `lava@dev.com` (not
+  `mahalo_admin`, which is Gitea) and the password `MahaloDock123!` (capital M
+  and D, trailing `!`). If the credentials are right and it still fails, the
+  stored hash in an old `backend-data` volume may have drifted — run the
+  password-reset one-liner in **Login credentials** above. If the login button
+  seems to do nothing at all (no error), the frontend can't reach the backend:
+  make sure all three ports (3000/3001/8008) are forwarding and hard-refresh
+  (Ctrl+Shift+R).
 - **Chatbot: "Bedrock error: The config profile () could not be found".** This
   was the empty-`AWS_PROFILE` bug and is now fixed in the compose files (see the
   AWS_PROFILE bugfix note above). If you still hit it, confirm the stack was
