@@ -34,11 +34,21 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectTag = "mahalo-dock"
 $PemPath    = Join-Path $env:USERPROFILE ".ssh\$KeyName.pem"
+$RemoteDir  = "/home/ubuntu/mahalo-dock"
 
 function Info($m){ Write-Host "[*] $m" -ForegroundColor Cyan }
 function Ok($m){   Write-Host "[+] $m" -ForegroundColor Green }
 function Warn($m){ Write-Host "[!] $m" -ForegroundColor Yellow }
 function Die($m){  Write-Host "[x] $m" -ForegroundColor Red; exit 1 }
+
+# Scrub env vars that hijack the AWS CLI's credential resolution. The big one is
+# AWS_EXECUTION_ENV=EC2, which makes the CLI chase EC2 instance-metadata creds
+# (absent on a WorkSpace) and falsely report "No valid AWS session" even right
+# after a successful 'aws sso login'. We also clear any static creds / stray
+# profile so the explicit --profile below is what actually gets used.
+foreach ($v in @("AWS_EXECUTION_ENV","AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN","AWS_PROFILE")) {
+    if (Test-Path "Env:$v") { Warn "Unsetting conflicting env var $v for this session"; Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+}
 
 function Aws {
     param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)
@@ -47,6 +57,29 @@ function Aws {
     $s = ($out | Out-String).Trim()
     if ($s -eq "None") { return "" }
     return $s
+}
+
+# Run a shell script on the instance via SSM (no SSH needed) and return its
+# combined stdout. The instance role already carries AmazonSSMManagedInstanceCore
+# (granted by deploy-aws.ps1). Lines are passed as a JSON file to dodge PowerShell
+# quoting mangling of the inline --parameters form.
+function Invoke-Ssm {
+    param([string]$InstanceId, [string[]]$Commands, [int]$TimeoutSec = 180)
+    $payload = @{ commands = $Commands } | ConvertTo-Json -Compress
+    $tmp = Join-Path $env:TEMP ("mahalo-ssm-{0}.json" -f ([guid]::NewGuid().ToString('N')))
+    $payload | Out-File -FilePath $tmp -Encoding ascii
+    try {
+        $cmdId = Aws ssm send-command --instance-ids $InstanceId --document-name "AWS-RunShellScript" `
+            --parameters "file://$tmp" --query "Command.CommandId" --output text
+        $deadline = (Get-Date).AddSeconds($TimeoutSec)
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 4
+            $status = Aws ssm get-command-invocation --command-id $cmdId --instance-id $InstanceId --query "Status" --output text
+            if ($status -in @("Success","Failed","Cancelled","TimedOut")) { break }
+        }
+        $out = Aws ssm get-command-invocation --command-id $cmdId --instance-id $InstanceId --query "StandardOutputContent" --output text
+        return [pscustomobject]@{ Status = $status; Output = $out }
+    } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }
 }
 
 # preflight
@@ -84,6 +117,38 @@ if (-not (Test-NetConnection -ComputerName $PublicIp -Port 22 -WarningAction Sil
     Warn "re-run deploy-aws.ps1 to re-lock the security group to your current IP."
 }
 
+# Ensure the app stack is actually UP on the instance before we forward ports to
+# it. When the instance is stopped/started the containers do NOT auto-start, so
+# the tunnel would forward localhost:3000 to a dead port and the browser shows
+# "Unable to connect". We bring the compose stack up over SSM and wait for the
+# frontend to answer, so a silent tunnel window always means a working app.
+Info "Ensuring the app stack is running on the instance (via SSM)..."
+$ensure = Invoke-Ssm -InstanceId $InstanceId -TimeoutSec 240 -Commands @(
+    "cd $RemoteDir || { echo 'NO_REPO_DIR'; exit 1; }",
+    # Drop any stale non-committed instance-role override left by an earlier
+    # manual workaround; it would shadow the committed Bedrock layering below.
+    "rm -f docker-compose.instance-role.yml",
+    # Instance-role Bedrock layering: base + bedrock default (no AWS_PROFILE, no
+    # ~/.aws mount), so boto3 uses the EC2 instance role.
+    "sudo docker compose -f docker-compose.yml -f docker-compose.bedrock.yml up -d 2>&1 | tail -30",
+    "echo '--- waiting for frontend ---'",
+    "for i in `$(seq 1 30); do code=`$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/ || echo 000); if [ `"`$code`" = '200' ]; then break; fi; sleep 2; done",
+    "echo FRONTEND_HTTP=`$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/ || echo 000)",
+    "echo BACKEND_HEALTH=`$(curl -s http://localhost:8008/health || echo unreachable)"
+)
+if ($ensure.Output -match "NO_REPO_DIR") {
+    Warn "App repo not found at $RemoteDir on the instance. The stack was never deployed here."
+    Warn "Run  pwsh ./scripts/deploy-aws.ps1  first, then re-run this script."
+} elseif ($ensure.Status -ne "Success") {
+    Warn "Could not confirm the stack via SSM (status: $($ensure.Status)). Proceeding to open the tunnel anyway;"
+    Warn "if the browser can't connect, the app may still be starting on the instance."
+} else {
+    $feCode = if ($ensure.Output -match 'FRONTEND_HTTP=(\d+)') { $Matches[1] } else { "000" }
+    $beLine = if ($ensure.Output -match 'BACKEND_HEALTH=(.+)')  { $Matches[1].Trim() } else { "unknown" }
+    if ($feCode -eq "200") { Ok "App is up on the instance (frontend 200; backend: $beLine)" }
+    else { Warn "Frontend returned HTTP $feCode on the instance (backend: $beLine). It may still be warming up; give it ~30s after the tunnel opens." }
+}
+
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
 Ok "TUNNEL IS NOW OPENING. This window will go SILENT and look frozen."
@@ -97,6 +162,23 @@ Write-Host " Browse (while this window stays open):"
 Write-Host "   App     : http://localhost:3000"
 Write-Host "   Gitea   : http://localhost:3001  (mahalo_admin / MahaloDock123!)"
 Write-Host "   Backend : http://localhost:8008/health"
+Write-Host ""
+# We cannot probe localhost here: the ssh call below runs in the FOREGROUND and
+# blocks this terminal for the life of the tunnel, so there is no moment after
+# it to curl. Instead, tell the user how to verify the forward from a SECOND
+# terminal, and pre-empt the most common false alarm (a Firefox/localhost proxy
+# setting, not a dead tunnel).
+Write-Host " Verify the tunnel from a SECOND terminal (optional):" -ForegroundColor Yellow
+Write-Host "   curl.exe -v http://localhost:3000/        # note curl.exe, not PowerShell's curl alias"
+Write-Host "   A 200/HTML response means the forward works."
+Write-Host ""
+Write-Host " If the browser says ""Unable to connect"" at localhost:3000:" -ForegroundColor Yellow
+Write-Host "   1. Confirm THIS tunnel window is still open (it should look frozen)."
+Write-Host "   2. It is often a Firefox/localhost PROXY setting, not a dead tunnel:"
+Write-Host "      Firefox Settings > Network Settings, ensure 'No proxy' for localhost"
+Write-Host "      (or add localhost,127.0.0.1 to 'No proxy for'). The curl.exe probe"
+Write-Host "      above bypasses the browser proxy, so if curl works but Firefox"
+Write-Host "      doesn't, it's the proxy."
 Write-Host ""
 
 # Foreground tunnel; -N = no remote shell, just port forwarding. Keepalives are

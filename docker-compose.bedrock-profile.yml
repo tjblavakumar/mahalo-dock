@@ -1,0 +1,28 @@
+# Bedrock NAMED-PROFILE override (OPT-IN): use this ONLY on a host where the AWS
+# credentials live in a ~/.aws profile rather than an instance role — for
+# example the AWS WorkSpace used to drive the demo.
+#
+# Layer it AFTER both the base compose and the instance-role default:
+#   $env:AWS_PROFILE = "lava"      # must be a real, non-empty profile name
+#   docker compose -f docker-compose.yml -f docker-compose.bedrock.yml `
+#     -f docker-compose.bedrock-profile.yml up -d
+#
+# It does two things the instance-role default intentionally does NOT:
+#   1. Bind-mounts the host's AWS profile dir read-only into the container.
+#   2. Sets AWS_PROFILE for boto3.
+#
+# AWS_PROFILE uses the "required variable" form ${AWS_PROFILE:?...}: if it is
+# unset OR empty, Compose refuses to start with the message below instead of
+# silently injecting an empty profile (the "config profile ()" bug). That is the
+# guarantee that an empty AWS_PROFILE can never reach the container.
+#
+# Because Compose MERGES service lists, the ~/.aws mount here is ADDED to the
+# base backend-data volume rather than replacing it.
+services:
+  backend:
+    environment:
+      - AWS_PROFILE=${AWS_PROFILE:?set AWS_PROFILE to a non-empty profile name (e.g. lava) before layering docker-compose.bedrock-profile.yml}
+    volumes:
+      # Read-only host AWS profile -> container. Default ~/.aws; override with
+      # AWS_PROFILE_DIR (e.g. on Windows/WorkSpace: %USERPROFILE%\.aws).
+      - ${AWS_PROFILE_DIR:-~/.aws}:/root/.aws:ro

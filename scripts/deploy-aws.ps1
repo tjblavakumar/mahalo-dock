@@ -14,9 +14,12 @@
       - auto-resolves the active Bedrock Claude Sonnet inference profile id
         rather than hardcoding a model that may rotate;
       - reuses the EC2 key pair + local .pem when both exist, else creates fresh;
-      - clones the repo on the instance, writes .env for Bedrock, and (belt &
-        suspenders) strips any empty AWS_PROFILE line from the compose so the
-        instance role is used even on an unpatched checkout;
+      - clones the repo on the instance, writes .env for Bedrock, and brings the
+        stack up with the Bedrock instance-role layering
+        (-f docker-compose.yml -f docker-compose.bedrock.yml) so boto3 uses the
+        EC2 instance role (no AWS_PROFILE, no ~/.aws mount);
+      - installs a systemd oneshot (mahalo-dock.service) so the stack auto-starts
+        on every boot, so a stop/start no longer needs a manual bring-up;
       - prints the ready-to-paste SSH tunnel command and a resource summary.
 
     This script creates BILLABLE resources (t3.medium + 30 GB gp3). Stop or tear
@@ -75,6 +78,16 @@ function Invoke-Remote {
 }
 
 # ---------- 0. preflight -----------------------------------------------------
+# Scrub env vars that hijack the AWS CLI's credential resolution (mirrors
+# open-tunnel.ps1). The big one is AWS_EXECUTION_ENV=EC2, which makes the CLI
+# chase EC2 instance-metadata creds (absent on a WorkSpace) and falsely report
+# "No valid AWS session" even right after a successful 'aws sso login'. We also
+# clear any static creds / stray (possibly empty or mismatched) profile so the
+# explicit --profile below is what actually gets used.
+foreach ($v in @("AWS_EXECUTION_ENV","AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN","AWS_PROFILE")) {
+    if (Test-Path "Env:$v") { Warn "Unsetting conflicting env var $v for this session"; Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+}
+
 Info "Verifying AWS session for profile '$Profile' in '$Region'..."
 try { $ident = Aws sts get-caller-identity --output json | ConvertFrom-Json }
 catch { Die "No valid AWS session. Run:  aws sso login --profile $Profile" }
@@ -282,13 +295,45 @@ sed -i 's|^BEDROCK_REGION=.*|BEDROCK_REGION=$Region|' .env
 sed -i 's|^BEDROCK_ORCHESTRATOR_MODEL=.*|BEDROCK_ORCHESTRATOR_MODEL=$BedrockModel|' .env
 sed -i 's|^BEDROCK_SYNTHESIS_MODEL=.*|BEDROCK_SYNTHESIS_MODEL=$BedrockModel|' .env
 
-# --- Safety net: strip the empty-AWS_PROFILE bug from compose even on an
-#     unpatched checkout, so the EC2 instance role is used. ---
-sed -i '/- AWS_PROFILE=\${AWS_PROFILE:-}/d' docker-compose.yml || true
+# --- Empty-AWS_PROFILE bug is fixed at the source now. docker-compose.bedrock.yml
+#     is the instance-role default: it sets only LLM_PROVIDER/SYNTHESIS_PROVIDER
+#     =bedrock, carries no AWS_PROFILE and no ~/.aws mount, so boto3 uses the EC2
+#     instance role. No defensive sed on docker-compose.yml is needed. Remove any
+#     stale non-committed instance-role override that could shadow the committed
+#     config from an earlier manual workaround. ---
+rm -f docker-compose.instance-role.yml
 
-# --- Build + start (needs the docker group; use sudo for this first run) ---
-sudo docker compose up -d --build
-sudo docker compose ps
+# --- Build + start with the Bedrock instance-role layering (needs the docker
+#     group; use sudo for this first run). ---
+sudo docker compose -f docker-compose.yml -f docker-compose.bedrock.yml up -d --build
+sudo docker compose -f docker-compose.yml -f docker-compose.bedrock.yml ps
+
+# --- Auto-start the stack on boot so a stop/start no longer needs manual
+#     bring-up. A systemd oneshot runs 'docker compose ... up -d' from the repo
+#     on every boot; because it re-reads the compose files it recreates the
+#     containers with the current config. Idempotent: the unit is overwritten
+#     with identical content each run, then re-enabled. ---
+sudo tee /etc/systemd/system/mahalo-dock.service >/dev/null <<'UNIT'
+[Unit]
+Description=MAHALO-dock demo stack (docker compose, Bedrock instance-role)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/ubuntu/mahalo-dock
+ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.bedrock.yml up -d
+ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.bedrock.yml down
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable docker >/dev/null 2>&1 || true
+sudo systemctl enable mahalo-dock.service >/dev/null 2>&1 || true
+echo "AUTOSTART_INSTALLED"
 echo "PROVISION_DONE"
 "@
 $provisionOut = Invoke-Remote -Ip $PublicIp -Script $remote
