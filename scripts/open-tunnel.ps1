@@ -65,13 +65,27 @@ function Aws {
 # quoting mangling of the inline --parameters form.
 function Invoke-Ssm {
     param([string]$InstanceId, [string[]]$Commands, [int]$TimeoutSec = 180)
-    $payload = @{ commands = $Commands } | ConvertTo-Json -Compress
+
+    # IMPORTANT (cross-PowerShell-version safety): the remote commands contain
+    # shell metacharacters like '>' and '&' (e.g. "2>&1"). Windows PowerShell
+    # 5.1's ConvertTo-Json escapes those to \u003e / \u0026; when AWS reads that
+    # inline redirect, `aws ssm send-command` STALLS, which used to hang this
+    # whole script before the tunnel opened (pwsh 7 does not escape them, so it
+    # only broke under 5.1). To be version-proof we base64-encode the entire
+    # remote script and send ONE command: `echo <b64> | base64 -d | bash`. The
+    # JSON then holds only [A-Za-z0-9+/=] plus a fixed wrapper - nothing for any
+    # PowerShell version to mangle.
+    $script = ($Commands -join "`n") -replace "`r", ""
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script))
+    $payload = @{ commands = @("echo $b64 | base64 -d | bash") } | ConvertTo-Json -Compress
     $tmp = Join-Path $env:TEMP ("mahalo-ssm-{0}.json" -f ([guid]::NewGuid().ToString('N')))
     $payload | Out-File -FilePath $tmp -Encoding ascii
     try {
         $cmdId = Aws ssm send-command --instance-ids $InstanceId --document-name "AWS-RunShellScript" `
             --parameters "file://$tmp" --query "Command.CommandId" --output text
+        if (-not $cmdId) { throw "ssm send-command returned no CommandId" }
         $deadline = (Get-Date).AddSeconds($TimeoutSec)
+        $status = "Pending"
         while ((Get-Date) -lt $deadline) {
             Start-Sleep -Seconds 4
             $status = Aws ssm get-command-invocation --command-id $cmdId --instance-id $InstanceId --query "Status" --output text
