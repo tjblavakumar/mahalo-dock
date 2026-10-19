@@ -123,20 +123,31 @@ if (-not (Test-NetConnection -ComputerName $PublicIp -Port 22 -WarningAction Sil
 # "Unable to connect". We bring the compose stack up over SSM and wait for the
 # frontend to answer, so a silent tunnel window always means a working app.
 Info "Ensuring the app stack is running on the instance (via SSM)..."
-$ensure = Invoke-Ssm -InstanceId $InstanceId -TimeoutSec 240 -Commands @(
-    "cd $RemoteDir || { echo 'NO_REPO_DIR'; exit 1; }",
-    # Drop any stale non-committed instance-role override left by an earlier
-    # manual workaround; it would shadow the committed Bedrock layering below.
-    "rm -f docker-compose.instance-role.yml",
-    # Instance-role Bedrock layering: base + bedrock default (no AWS_PROFILE, no
-    # ~/.aws mount), so boto3 uses the EC2 instance role.
-    "sudo docker compose -f docker-compose.yml -f docker-compose.bedrock.yml up -d 2>&1 | tail -30",
-    "echo '--- waiting for frontend ---'",
-    "for i in `$(seq 1 30); do code=`$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/ || echo 000); if [ `"`$code`" = '200' ]; then break; fi; sleep 2; done",
-    "echo FRONTEND_HTTP=`$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/ || echo 000)",
-    "echo BACKEND_HEALTH=`$(curl -s http://localhost:8008/health || echo unreachable)"
-)
-if ($ensure.Output -match "NO_REPO_DIR") {
+# NON-FATAL: this is a best-effort convenience (the systemd unit already brings
+# the stack up on boot). Wrap it so a transient SSM/CLI error here can NEVER
+# abort the script before the tunnel opens - the tunnel is the whole point.
+$ensure = $null
+try {
+    $ensure = Invoke-Ssm -InstanceId $InstanceId -TimeoutSec 240 -Commands @(
+        "cd $RemoteDir || { echo 'NO_REPO_DIR'; exit 1; }",
+        # Drop any stale non-committed instance-role override left by an earlier
+        # manual workaround; it would shadow the committed Bedrock layering below.
+        "rm -f docker-compose.instance-role.yml",
+        # Instance-role Bedrock layering: base + bedrock default (no AWS_PROFILE, no
+        # ~/.aws mount), so boto3 uses the EC2 instance role.
+        "sudo docker compose -f docker-compose.yml -f docker-compose.bedrock.yml up -d 2>&1 | tail -30",
+        "echo '--- waiting for frontend ---'",
+        "for i in `$(seq 1 30); do code=`$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/ || echo 000); if [ `"`$code`" = '200' ]; then break; fi; sleep 2; done",
+        "echo FRONTEND_HTTP=`$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/ || echo 000)",
+        "echo BACKEND_HEALTH=`$(curl -s http://localhost:8008/health || echo unreachable)"
+    )
+} catch {
+    Warn "Could not reach the instance over SSM ($_)."
+    Warn "Skipping the stack pre-check; the boot-time service has likely started it already. Opening the tunnel anyway."
+}
+if ($null -eq $ensure) {
+    # SSM unavailable; fall through to the tunnel (app is usually up via systemd).
+} elseif ($ensure.Output -match "NO_REPO_DIR") {
     Warn "App repo not found at $RemoteDir on the instance. The stack was never deployed here."
     Warn "Run  pwsh ./scripts/deploy-aws.ps1  first, then re-run this script."
 } elseif ($ensure.Status -ne "Success") {
@@ -149,6 +160,45 @@ if ($ensure.Output -match "NO_REPO_DIR") {
     else { Warn "Frontend returned HTTP $feCode on the instance (backend: $beLine). It may still be warming up; give it ~30s after the tunnel opens." }
 }
 
+# Local-port preflight. ssh below uses -o ExitOnForwardFailure=yes, which means
+# if ANY of 3000/3001/8008 is already bound locally (almost always a PREVIOUS
+# tunnel still running in another window), ssh refuses to open and exits at once
+# with no useful message. This is the #1 reason "the script does nothing but the
+# manual ssh works". So: detect who holds the ports, and offer to close a stale
+# tunnel so this one can bind.
+$TunnelPorts = 3000,3001,8008
+$held = Get-NetTCPConnection -State Listen -LocalPort $TunnelPorts -ErrorAction SilentlyContinue
+if ($held) {
+    $pids = $held | Select-Object -ExpandProperty OwningProcess -Unique
+    $busyPorts = ($held | Select-Object -ExpandProperty LocalPort -Unique | Sort-Object) -join ", "
+    Warn "Local port(s) already in use: $busyPorts"
+    $sshHolders  = @()
+    $otherHolders = @()
+    foreach ($procId in $pids) {
+        $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+        if ($p -and $p.ProcessName -eq "ssh") { $sshHolders += $p } elseif ($p) { $otherHolders += $p }
+    }
+    if ($otherHolders) {
+        foreach ($p in $otherHolders) { Warn "  Port held by non-ssh process: $($p.ProcessName) (PID $($p.Id)) - not touching it." }
+        Die "A non-tunnel process is using a required port. Free it (or stop that app) and re-run. The tunnel cannot bind while it's taken."
+    }
+    if ($sshHolders) {
+        Warn "  These look like an EXISTING tunnel (ssh PID(s): $(( $sshHolders.Id ) -join ', '))."
+        Warn "  If that tunnel is already working, you can just use your browser - no need to re-run this."
+        $ans = Read-Host "Close the existing tunnel and open a fresh one? (y/n)"
+        if ($ans -eq "y") {
+            foreach ($p in $sshHolders) { try { Stop-Process -Id $p.Id -Force -ErrorAction Stop; Ok "  Closed stale tunnel (PID $($p.Id))" } catch { Warn "  Could not stop PID $($p.Id): $_" } }
+            Start-Sleep -Seconds 1
+            if (Get-NetTCPConnection -State Listen -LocalPort $TunnelPorts -ErrorAction SilentlyContinue) {
+                Die "Ports still in use after closing. Wait a few seconds and re-run, or close the other terminal manually."
+            }
+            Ok "Ports freed; opening a fresh tunnel."
+        } else {
+            Die "Leaving the existing tunnel in place. Nothing to do - switch to your browser at http://localhost:3000."
+        }
+    }
+}
+
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
 Ok "TUNNEL IS NOW OPENING. This window will go SILENT and look frozen."
@@ -159,8 +209,8 @@ Write-Host "    Press Ctrl+C here ONLY when you want to close the tunnel."
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host ""
 Write-Host " Browse (while this window stays open):"
-Write-Host "   App     : http://localhost:3000"
-Write-Host "   Gitea   : http://localhost:3001  (mahalo_admin / MahaloDock123!)"
+Write-Host "   App     : http://localhost:3000  (login: lava@dev.com / MahaloDock123!)"
+Write-Host "   Gitea   : http://localhost:3001  (admin: mahalo_admin / MahaloDock123!)"
 Write-Host "   Backend : http://localhost:8008/health"
 Write-Host ""
 # We cannot probe localhost here: the ssh call below runs in the FOREGROUND and
