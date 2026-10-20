@@ -54,9 +54,27 @@ foreach ($v in @("AWS_EXECUTION_ENV","AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY"
 }
 
 function Aws {
-    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)
-    $out = & aws @Args --profile $Profile --region $Region 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "aws $($Args -join ' ') failed: $out" }
+    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$CliArgs)
+    # Force non-interactive behavior so a real console session can NEVER make the
+    # AWS CLI block waiting on input. The two classic hangs in an interactive
+    # Windows PowerShell window are:
+    #   1. the CLI's output PAGER (less-like) waiting for a keypress, and
+    #   2. any prompt reading from stdin.
+    # AWS_PAGER="" disables paging; redirecting stdin from NUL means any stray
+    # prompt gets EOF instead of hanging forever. (This is why the call was fast
+    # from a redirected child process but hung in the user's live console.)
+    $prevPager = $env:AWS_PAGER
+    $env:AWS_PAGER = ""
+    try {
+        # Piping $null into aws gives its stdin an immediate EOF, so any stray
+        # prompt can't block. (PowerShell 5.1 has no '< file' stdin redirect -
+        # that is a parse error there - so we use the pipeline form, which works
+        # in both 5.1 and 7.)
+        $out = $null | & aws @CliArgs --profile $Profile --region $Region 2>&1
+    } finally {
+        $env:AWS_PAGER = $prevPager
+    }
+    if ($LASTEXITCODE -ne 0) { throw "aws $($CliArgs -join ' ') failed: $out" }
     $s = ($out | Out-String).Trim()
     if ($s -eq "None") { return "" }
     return $s
