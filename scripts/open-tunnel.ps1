@@ -65,13 +65,21 @@ function Aws {
 # preflight
 if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) { Die "'ssh' not found on PATH (install OpenSSH client)." }
 if (-not (Test-Path $PemPath)) { Die "Key not found: $PemPath. Run deploy-aws.ps1 first." }
+# NOTE: each 'aws' call below can take several seconds (the AWS CLI on Windows is
+# slow to start). We print a line BEFORE every call so the window is never a
+# silent mystery - if you see one of these lines and then a pause, it is just
+# the AWS CLI working, not a hang.
+Info "Checking AWS session (aws sts get-caller-identity)... this can take a few seconds"
 try { Aws sts get-caller-identity --output text | Out-Null } catch { Die "No valid AWS session. Run: aws sso login --profile $Profile" }
+Ok "AWS session OK"
 
 # find the instance
-Info "Locating the $ProjectTag instance..."
+Info "Locating the $ProjectTag instance (aws ec2 describe-instances)..."
 $InstanceId = Aws ec2 describe-instances --filters "Name=tag:project,Values=$ProjectTag" "Name=instance-state-name,Values=pending,running,stopped,stopping" --query "Reservations[0].Instances[0].InstanceId" --output text
 if (-not $InstanceId) { Die "No $ProjectTag instance found. Run deploy-aws.ps1 first." }
+Ok "Found instance $InstanceId"
 
+Info "Checking instance state..."
 $State = Aws ec2 describe-instances --instance-ids $InstanceId --query "Reservations[0].Instances[0].State.Name" --output text
 if ($State -eq "stopped") {
     Warn "Instance $InstanceId is stopped."
@@ -87,15 +95,17 @@ if ($State -eq "stopped") {
     Aws ec2 wait instance-running --instance-ids $InstanceId | Out-Null
 }
 
+Info "Resolving the instance public IP..."
 $PublicIp = Aws ec2 describe-instances --instance-ids $InstanceId --query "Reservations[0].Instances[0].PublicIpAddress" --output text
 if (-not $PublicIp) { Die "Instance has no public IP." }
 Ok "Instance $InstanceId at $PublicIp"
 
 # quick reachability hint (non-fatal): if blocked, it's usually the egress-IP SG rule
+Info "Checking SSH (TCP 22) reachability to $PublicIp..."
 if (-not (Test-NetConnection -ComputerName $PublicIp -Port 22 -WarningAction SilentlyContinue -InformationLevel Quiet)) {
     Warn "TCP 22 to $PublicIp not reachable yet. If this persists, your egress IP may have changed;"
     Warn "re-run deploy-aws.ps1 to re-lock the security group to your current IP."
-}
+} else { Ok "SSH port 22 reachable" }
 
 # NOTE: we deliberately do NOT run a slow SSM "is the app up?" pre-check here.
 # The instance installs a systemd unit (mahalo-dock.service) that starts the

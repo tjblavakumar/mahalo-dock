@@ -13,7 +13,7 @@ the WorkSpace, in PowerShell.
 This is the normal case. The instance is just stopped between demos.
 ```powershell
 aws sso login --profile lava        # authenticate (skip if your session is still valid)
-pwsh ./scripts/open-tunnel.ps1      # starts the instance if stopped, then tunnels
+.\scripts\open-tunnel.ps1      # starts the instance if stopped, then tunnels
 ```
 Then, in your **browser**, open http://localhost:3000 and log in with
 `lava@dev.com` / `MahaloDock123!` (see **Login credentials**). Leave the tunnel
@@ -22,22 +22,22 @@ window open (it goes silent — that's normal). Press **Ctrl+C** in it when done
 To pause and save money after the demo:
 ```powershell
 # Ctrl+C in the tunnel window first, then:
-pwsh ./scripts/teardown-aws.ps1 -StopOnly
+.\scripts\teardown-aws.ps1 -StopOnly
 ```
 
 ### B. First demo of the month (right after the monthly purge wiped everything)
 Nothing exists yet, so you must build it once. This takes several minutes.
 ```powershell
 aws sso login --profile lava        # 1. authenticate
-pwsh ./scripts/deploy-aws.ps1       # 2. build infra + deploy app (several min)
-pwsh ./scripts/open-tunnel.ps1      # 3. SEPARATE terminal; opens your window into the app
+.\scripts\deploy-aws.ps1       # 2. build infra + deploy app (several min)
+.\scripts\open-tunnel.ps1      # 3. SEPARATE terminal; opens your window into the app
 ```
 Then browse http://localhost:3000 and log in as above. After this, every later
 demo this month is just situation **A**.
 
 ### C. You're done for the month (or want a clean slate early)
 ```powershell
-pwsh ./scripts/teardown-aws.ps1     # deletes everything (prompts; add -Force to skip)
+.\scripts\teardown-aws.ps1     # deletes everything (prompts; add -Force to skip)
 ```
 
 > Quick decision: **Does a `mahalo-dock` instance already exist this month?**
@@ -90,21 +90,21 @@ stop things. Use `-StopOnly` when you just want to pause between demos.
 First time each month (after the reset wipes everything):
 ```powershell
 aws sso login --profile lava        # 1. authenticate
-pwsh ./scripts/deploy-aws.ps1       # 2. build infra + deploy app (several min)
-pwsh ./scripts/open-tunnel.ps1      # 3. separate terminal; your window into the app
+.\scripts\deploy-aws.ps1       # 2. build infra + deploy app (several min)
+.\scripts\open-tunnel.ps1      # 3. separate terminal; your window into the app
 # 4. browse http://localhost:3000 and demo; keep the tunnel terminal open
 ```
 
 Done with a demo (pause to save money):
 ```powershell
 # Ctrl+C in the tunnel terminal (closes your window; app still runs)
-pwsh ./scripts/teardown-aws.ps1 -StopOnly
+.\scripts\teardown-aws.ps1 -StopOnly
 ```
 
 Next demo the same month (instance only stopped, app still there):
 ```powershell
 aws sso login --profile lava        # if the session expired
-pwsh ./scripts/open-tunnel.ps1      # detects the stopped instance, offers to start it, then tunnels
+.\scripts\open-tunnel.ps1      # detects the stopped instance, offers to start it, then tunnels
 # No deploy needed — you skip straight to demoing.
 ```
 The containers **auto-start on boot** now (see below), so after a stop/start the
@@ -114,7 +114,7 @@ is ready either way.
 
 End of month / clean slate:
 ```powershell
-pwsh ./scripts/teardown-aws.ps1     # fully deletes everything (the monthly reset would too)
+.\scripts\teardown-aws.ps1     # fully deletes everything (the monthly reset would too)
 ```
 
 ## Prerequisites (on the WorkSpace)
@@ -147,7 +147,7 @@ Open a fresh terminal afterward for the change to take effect.
 
 ## Deploy (end to end)
 ```powershell
-pwsh ./scripts/deploy-aws.ps1
+.\scripts\deploy-aws.ps1
 ```
 Creates (or reuses, if already present): VPC, internet gateway, public subnet,
 route table, security group (inbound SSH locked to your current egress IP), key
@@ -192,13 +192,13 @@ docker compose -f docker-compose.yml -f docker-compose.bedrock.yml `
 
 Common options:
 ```powershell
-pwsh ./scripts/deploy-aws.ps1 -Profile lava -Region us-east-1 -InstanceType t3.large
+.\scripts\deploy-aws.ps1 -Profile lava -Region us-east-1 -InstanceType t3.large
 ```
 
 ## Open the tunnel (separate terminal, keep open)
 Easiest — resolves the instance IP by tag automatically:
 ```powershell
-pwsh ./scripts/open-tunnel.ps1
+.\scripts\open-tunnel.ps1
 ```
 It finds the running `mahalo-dock` instance (offers to start it if stopped),
 warns if TCP 22 isn't reachable (usually a changed egress IP → re-run deploy),
@@ -215,8 +215,8 @@ http://localhost:8008/health. See **Login credentials** below for the accounts.
 
 ## Stop / tear down
 ```powershell
-pwsh ./scripts/teardown-aws.ps1 -StopOnly   # pause: stop instance, keep infra (cheapest)
-pwsh ./scripts/teardown-aws.ps1             # full teardown (prompts; -Force to skip)
+.\scripts\teardown-aws.ps1 -StopOnly   # pause: stop instance, keep infra (cheapest)
+.\scripts\teardown-aws.ps1             # full teardown (prompts; -Force to skip)
 ```
 
 ## Notes
