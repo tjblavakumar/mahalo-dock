@@ -34,12 +34,15 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectTag = "mahalo-dock"
 $PemPath    = Join-Path $env:USERPROFILE ".ssh\$KeyName.pem"
-$RemoteDir  = "/home/ubuntu/mahalo-dock"
 
-function Info($m){ Write-Host "[*] $m" -ForegroundColor Cyan }
-function Ok($m){   Write-Host "[+] $m" -ForegroundColor Green }
-function Warn($m){ Write-Host "[!] $m" -ForegroundColor Yellow }
-function Die($m){  Write-Host "[x] $m" -ForegroundColor Red; exit 1 }
+# Every message is flushed to the console immediately via [Console]::Out so the
+# user sees progress the instant each step runs. Plain Write-Host can sit in a
+# buffer when the script ends in a long-blocking process (the ssh tunnel), which
+# is why earlier versions looked frozen with "no output" for a long time.
+function Info($m){ Write-Host "[*] $m" -ForegroundColor Cyan;   [Console]::Out.Flush() }
+function Ok($m){   Write-Host "[+] $m" -ForegroundColor Green;  [Console]::Out.Flush() }
+function Warn($m){ Write-Host "[!] $m" -ForegroundColor Yellow; [Console]::Out.Flush() }
+function Die($m){  Write-Host "[x] $m" -ForegroundColor Red;    [Console]::Out.Flush(); exit 1 }
 
 # Scrub env vars that hijack the AWS CLI's credential resolution. The big one is
 # AWS_EXECUTION_ENV=EC2, which makes the CLI chase EC2 instance-metadata creds
@@ -57,43 +60,6 @@ function Aws {
     $s = ($out | Out-String).Trim()
     if ($s -eq "None") { return "" }
     return $s
-}
-
-# Run a shell script on the instance via SSM (no SSH needed) and return its
-# combined stdout. The instance role already carries AmazonSSMManagedInstanceCore
-# (granted by deploy-aws.ps1). Lines are passed as a JSON file to dodge PowerShell
-# quoting mangling of the inline --parameters form.
-function Invoke-Ssm {
-    param([string]$InstanceId, [string[]]$Commands, [int]$TimeoutSec = 180)
-
-    # IMPORTANT (cross-PowerShell-version safety): the remote commands contain
-    # shell metacharacters like '>' and '&' (e.g. "2>&1"). Windows PowerShell
-    # 5.1's ConvertTo-Json escapes those to \u003e / \u0026; when AWS reads that
-    # inline redirect, `aws ssm send-command` STALLS, which used to hang this
-    # whole script before the tunnel opened (pwsh 7 does not escape them, so it
-    # only broke under 5.1). To be version-proof we base64-encode the entire
-    # remote script and send ONE command: `echo <b64> | base64 -d | bash`. The
-    # JSON then holds only [A-Za-z0-9+/=] plus a fixed wrapper - nothing for any
-    # PowerShell version to mangle.
-    $script = ($Commands -join "`n") -replace "`r", ""
-    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script))
-    $payload = @{ commands = @("echo $b64 | base64 -d | bash") } | ConvertTo-Json -Compress
-    $tmp = Join-Path $env:TEMP ("mahalo-ssm-{0}.json" -f ([guid]::NewGuid().ToString('N')))
-    $payload | Out-File -FilePath $tmp -Encoding ascii
-    try {
-        $cmdId = Aws ssm send-command --instance-ids $InstanceId --document-name "AWS-RunShellScript" `
-            --parameters "file://$tmp" --query "Command.CommandId" --output text
-        if (-not $cmdId) { throw "ssm send-command returned no CommandId" }
-        $deadline = (Get-Date).AddSeconds($TimeoutSec)
-        $status = "Pending"
-        while ((Get-Date) -lt $deadline) {
-            Start-Sleep -Seconds 4
-            $status = Aws ssm get-command-invocation --command-id $cmdId --instance-id $InstanceId --query "Status" --output text
-            if ($status -in @("Success","Failed","Cancelled","TimedOut")) { break }
-        }
-        $out = Aws ssm get-command-invocation --command-id $cmdId --instance-id $InstanceId --query "StandardOutputContent" --output text
-        return [pscustomobject]@{ Status = $status; Output = $out }
-    } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }
 }
 
 # preflight
@@ -131,48 +97,18 @@ if (-not (Test-NetConnection -ComputerName $PublicIp -Port 22 -WarningAction Sil
     Warn "re-run deploy-aws.ps1 to re-lock the security group to your current IP."
 }
 
-# Ensure the app stack is actually UP on the instance before we forward ports to
-# it. When the instance is stopped/started the containers do NOT auto-start, so
-# the tunnel would forward localhost:3000 to a dead port and the browser shows
-# "Unable to connect". We bring the compose stack up over SSM and wait for the
-# frontend to answer, so a silent tunnel window always means a working app.
-Info "Ensuring the app stack is running on the instance (via SSM)..."
-# NON-FATAL: this is a best-effort convenience (the systemd unit already brings
-# the stack up on boot). Wrap it so a transient SSM/CLI error here can NEVER
-# abort the script before the tunnel opens - the tunnel is the whole point.
-$ensure = $null
-try {
-    $ensure = Invoke-Ssm -InstanceId $InstanceId -TimeoutSec 240 -Commands @(
-        "cd $RemoteDir || { echo 'NO_REPO_DIR'; exit 1; }",
-        # Drop any stale non-committed instance-role override left by an earlier
-        # manual workaround; it would shadow the committed Bedrock layering below.
-        "rm -f docker-compose.instance-role.yml",
-        # Instance-role Bedrock layering: base + bedrock default (no AWS_PROFILE, no
-        # ~/.aws mount), so boto3 uses the EC2 instance role.
-        "sudo docker compose -f docker-compose.yml -f docker-compose.bedrock.yml up -d 2>&1 | tail -30",
-        "echo '--- waiting for frontend ---'",
-        "for i in `$(seq 1 30); do code=`$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/ || echo 000); if [ `"`$code`" = '200' ]; then break; fi; sleep 2; done",
-        "echo FRONTEND_HTTP=`$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/ || echo 000)",
-        "echo BACKEND_HEALTH=`$(curl -s http://localhost:8008/health || echo unreachable)"
-    )
-} catch {
-    Warn "Could not reach the instance over SSM ($_)."
-    Warn "Skipping the stack pre-check; the boot-time service has likely started it already. Opening the tunnel anyway."
-}
-if ($null -eq $ensure) {
-    # SSM unavailable; fall through to the tunnel (app is usually up via systemd).
-} elseif ($ensure.Output -match "NO_REPO_DIR") {
-    Warn "App repo not found at $RemoteDir on the instance. The stack was never deployed here."
-    Warn "Run  pwsh ./scripts/deploy-aws.ps1  first, then re-run this script."
-} elseif ($ensure.Status -ne "Success") {
-    Warn "Could not confirm the stack via SSM (status: $($ensure.Status)). Proceeding to open the tunnel anyway;"
-    Warn "if the browser can't connect, the app may still be starting on the instance."
-} else {
-    $feCode = if ($ensure.Output -match 'FRONTEND_HTTP=(\d+)') { $Matches[1] } else { "000" }
-    $beLine = if ($ensure.Output -match 'BACKEND_HEALTH=(.+)')  { $Matches[1].Trim() } else { "unknown" }
-    if ($feCode -eq "200") { Ok "App is up on the instance (frontend 200; backend: $beLine)" }
-    else { Warn "Frontend returned HTTP $feCode on the instance (backend: $beLine). It may still be warming up; give it ~30s after the tunnel opens." }
-}
+# NOTE: we deliberately do NOT run a slow SSM "is the app up?" pre-check here.
+# The instance installs a systemd unit (mahalo-dock.service) that starts the
+# compose stack on every boot, so by the time you can SSH in, the app is already
+# coming up. The old SSM pre-check polled for up to ~4 minutes with NO output,
+# which made the script look frozen/hung - the single biggest source of the
+# "it just hangs with no feedback" problem. The tunnel is the whole point, so we
+# open it immediately. If the app genuinely isn't up yet, the browser shows it
+# within seconds and you simply refresh after ~30s.
+#
+# If you ever DO need to (re)start the stack on the instance by hand, SSH in and:
+#   cd /home/ubuntu/mahalo-dock
+#   sudo docker compose -f docker-compose.yml -f docker-compose.bedrock.yml up -d
 
 # Local-port preflight. ssh below uses -o ExitOnForwardFailure=yes, which means
 # if ANY of 3000/3001/8008 is already bound locally (almost always a PREVIOUS
@@ -213,11 +149,13 @@ if ($held) {
     }
 }
 
+Info "Opening SSH tunnel to ubuntu@$PublicIp (verbose, so you can SEE it connect)..."
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
-Ok "TUNNEL IS NOW OPENING. This window will go SILENT and look frozen."
-Write-Host "    That silence is normal - it means the tunnel is working." -ForegroundColor Yellow
-Write-Host "    >> Leave THIS window open and untouched. <<" -ForegroundColor Yellow
+Ok "TUNNEL STARTING. Watch for this line, which means it is WORKING:"
+Write-Host "      debug1: Local forwarding listening on 127.0.0.1 port 3000." -ForegroundColor Green
+Write-Host "    After the forwarding lines appear, the window stays open and" -ForegroundColor Yellow
+Write-Host "    quiet - that is the tunnel running. Leave it open." -ForegroundColor Yellow
 Write-Host "    >> Switch to your BROWSER to use the app.  <<" -ForegroundColor Yellow
 Write-Host "    Press Ctrl+C here ONLY when you want to close the tunnel."
 Write-Host "============================================================" -ForegroundColor Green
@@ -245,13 +183,16 @@ Write-Host "      above bypasses the browser proxy, so if curl works but Firefox
 Write-Host "      doesn't, it's the proxy."
 Write-Host ""
 
-# Foreground tunnel; -N = no remote shell, just port forwarding. Keepalives are
-# tuned so a brief network blip does not silently drop the tunnel:
+# Foreground tunnel. -v makes ssh print connection + forwarding progress so the
+# window is NEVER a silent mystery: you will see "Authenticated to ..." and
+# "Local forwarding listening on 127.0.0.1 port 3000/3001/8008". -N = no remote
+# shell, just port forwarding. Keepalives keep a brief network blip from
+# silently dropping the tunnel:
 #   ServerAliveInterval=30  -> ping the server every 30s
 #   ServerAliveCountMax=3    -> only give up after 3 missed pings (~90s)
 #   ExitOnForwardFailure=yes -> fail loudly if a local port is already taken
 # NOTE: this command intentionally does NOT return until the tunnel closes.
-ssh -i $PemPath `
+ssh -v -i $PemPath `
     -o StrictHostKeyChecking=accept-new `
     -o ServerAliveInterval=30 `
     -o ServerAliveCountMax=3 `
