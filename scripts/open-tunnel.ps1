@@ -55,27 +55,30 @@ foreach ($v in @("AWS_EXECUTION_ENV","AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY"
 
 function Aws {
     param([Parameter(ValueFromRemainingArguments=$true)][string[]]$CliArgs)
-    # Force non-interactive behavior so a real console session can NEVER make the
-    # AWS CLI block waiting on input. The two classic hangs in an interactive
-    # Windows PowerShell window are:
-    #   1. the CLI's output PAGER (less-like) waiting for a keypress, and
-    #   2. any prompt reading from stdin.
-    # AWS_PAGER="" disables paging; redirecting stdin from NUL means any stray
-    # prompt gets EOF instead of hanging forever. (This is why the call was fast
-    # from a redirected child process but hung in the user's live console.)
-    $prevPager = $env:AWS_PAGER
-    $env:AWS_PAGER = ""
-    try {
-        # Piping $null into aws gives its stdin an immediate EOF, so any stray
-        # prompt can't block. (PowerShell 5.1 has no '< file' stdin redirect -
-        # that is a parse error there - so we use the pipeline form, which works
-        # in both 5.1 and 7.)
-        $out = $null | & aws @CliArgs --profile $Profile --region $Region 2>&1
-    } finally {
-        $env:AWS_PAGER = $prevPager
+    # Why this is wrapped in a timeout-guarded job:
+    # The 'lava' profile is an SSO profile (sso_session). When its SSO token is
+    # expired/missing, `aws --profile lava ...` launches the interactive SSO
+    # device-authorization flow and BLOCKS FOREVER in a console (it does not read
+    # stdin, so EOF tricks don't help). That is the real cause of the script
+    # "hanging on the first aws call". We run every aws call in a background job
+    # with a hard timeout; if it exceeds it, we fail fast with a clear message
+    # telling the user to run `aws sso login` - never an infinite hang.
+    # AWS_PAGER="" also disables the output pager (another console-only blocker).
+    $allArgs = @($CliArgs) + @("--profile", $Profile, "--region", $Region)
+    $job = Start-Job -ScriptBlock {
+        param($a)
+        $env:AWS_PAGER = ""
+        $out = & aws @a 2>&1
+        [pscustomobject]@{ Exit = $LASTEXITCODE; Out = ($out | Out-String) }
+    } -ArgumentList (, $allArgs)
+    if (-not (Wait-Job $job -Timeout 25)) {
+        Stop-Job $job; Remove-Job $job -Force -ErrorAction SilentlyContinue
+        Die "AWS call timed out: 'aws $($CliArgs -join ' ')'. Your SSO session for profile '$Profile' has likely expired. Run:  aws sso login --profile $Profile   then re-run this script."
     }
-    if ($LASTEXITCODE -ne 0) { throw "aws $($CliArgs -join ' ') failed: $out" }
-    $s = ($out | Out-String).Trim()
+    $res = Receive-Job $job
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+    if ($res.Exit -ne 0) { throw "aws $($CliArgs -join ' ') failed: $($res.Out.Trim())" }
+    $s = $res.Out.Trim()
     if ($s -eq "None") { return "" }
     return $s
 }
